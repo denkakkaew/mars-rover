@@ -100,12 +100,14 @@ bug. Keep them in step when the protocol changes.
 The `plan/` directory holds several renderings of the proposal at different stages of
 revision, **and they are not all the same mission.** Precedence when they disagree:
 
-1. **[plan/storyboard-exploration.docx](plan/storyboard-exploration.docx) — Revision 2,
-   2026-07-27. This is the current proposal.** The mission is "seek → scan → identify":
-   no robotic arm, one mast camera, a front-mounted UHF RFID reader, and a simulated
-   elemental-composition readout on the console.
-   [plan/storyboard-exploration-th.docx](plan/storyboard-exploration-th.docx) is a faithful
-   Thai translation of the same revision, not a different document.
+1. **[plan/storyboard-rev2.md](plan/storyboard-rev2.md) — Revision 2, 2026-07-27. This is the
+   current proposal, and the file to edit.** The mission is "seek → scan → identify": no
+   robotic arm, one mast camera, a front-mounted UHF RFID reader, and a simulated
+   elemental-composition readout on the console. It is a Markdown transcription of
+   [plan/storyboard-exploration.docx](plan/storyboard-exploration.docx);
+   [the Thai copy](plan/storyboard-exploration-th.docx) is a translation of the same revision,
+   not a different document. **Both .docx files are now downstream of the Markdown** — edit
+   the Markdown and re-export.
 2. [plan/mars-rover](plan/mars-rover) — the original raw requirements from the customer
    (9 numbered items), plain text, no extension. Still the source of truth for the *frame* of
    the project, but **Revision 2 deliberately departs from items 1, 6, 7 and 8** (arm, two
@@ -117,9 +119,7 @@ revision, **and they are not all the same mission.** Precedence when they disagr
 4. [plan/storyboard.html](plan/storyboard.html) and `plan/storyboard.docx` — renderings of
    Revision 1 or earlier. Historical. `~$r-rover.docx` is a Word lock file, not content.
 
-**There is no Markdown source for Revision 2** — it exists only as .docx. That means the
-authoritative proposal cannot be diffed or edited in this repo the way Revision 1 could.
-Worth fixing when someone has the time; until then, extract the text to read it:
+To read a `.docx` without Word — useful for checking the Markdown against the exported copy:
 
 ```powershell
 python -c "import re,zipfile;x=zipfile.ZipFile('plan/storyboard-exploration.docx').read('word/document.xml').decode();x=x.replace('</w:p>','\n');print(re.sub('<[^>]+>','',x))"
