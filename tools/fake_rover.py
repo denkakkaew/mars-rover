@@ -74,6 +74,37 @@ IDLE_DRAIN_FRACTION = 0.2  # idle current as a fraction of full-throttle current
 
 PHYSICS_HZ = 50
 VIEW_HZ = 5
+RFID_POLL_HZ = 20  # how often the firmware would poll the reader over UART
+
+# ---------------------------------------------------------------------------------
+# RFID propagation model
+#
+# Deliberately crude but the right *shape*, so the console is built against behaviour
+# it will actually meet: signal climbing steeply as the rover closes, falling away off
+# to the side, and going ragged at the edge of range rather than stopping cleanly.
+# Real numbers replace all of this at steps 2.3 and 2.4.
+# ---------------------------------------------------------------------------------
+
+# Antenna sits low on the front, facing the ground ahead — the mount the arm used to
+# occupy (proposal 4.3). Reads are measured from here, not from the rover's centre.
+ANTENNA_OFFSET_M = 0.12
+
+# Backscatter is a round trip, so received power falls with roughly the fourth power of
+# distance — 40 dB per decade, not the 20 of a one-way link. That steepness is why the
+# signal meter is usable as a proximity cue at all.
+PATH_LOSS_EXPONENT_DB = 40.0
+RSSI_AT_REF = -35.0  # dBm at REF_DISTANCE_M, boresight
+REF_DISTANCE_M = 0.05
+
+# Off-boresight the antenna simply stops hearing. Beyond this there is no read at any
+# distance, which is what makes bearing matter as much as range.
+BEAM_HALF_ANGLE_DEG = 60.0
+BEAM_EDGE_LOSS_DB = 12.0
+
+# Within this many dB of the sensitivity floor, reads come and go instead of locking.
+# The margin exists because a clean pass/fail cutoff would let the console get away with
+# assuming every approach ends in a solid read (risk R2).
+MARGINAL_BAND_DB = 6.0
 
 
 def clamp(value: float, low: float, high: float) -> float:
@@ -220,6 +251,35 @@ class Failsafe:
 
 
 @dataclass
+class Rock:
+    """A tagged rock sitting on the arena floor."""
+
+    tag_id: str
+    x: float
+    y: float
+    label: str = ""
+    # Risk R7: a tag cooked by adhesive during embedding reads exactly like a tag out of
+    # range — nothing. The rock looks completely normal. This flag is the only way to
+    # tell, and it is deliberately invisible to the console.
+    dead: bool = False
+
+    last_rssi: float = -120.0
+    last_read_t: float = 0.0
+
+
+def default_rocks() -> list[Rock]:
+    """A starter arena. Two of them sit close together on purpose, so the
+    two-tags-in-range case is reachable by just driving at them."""
+    return [
+        Rock("E2801160600001", 0.45, 1.10, "basalt"),
+        Rock("E2801160600002", 0.95, 1.75, "olivine"),
+        Rock("E2801160600003", 0.70, 2.55, "hematite"),
+        Rock("E2801160600004", 0.30, 2.15, "pair-A"),
+        Rock("E2801160600005", 0.44, 2.24, "pair-B"),
+    ]
+
+
+@dataclass
 class Rover:
     """Pose is metres in the arena; heading is radians clockwise from downrange."""
 
@@ -279,6 +339,33 @@ class Rover:
         """Weaker downrange, which is the R6 case step 1.2 goes looking for."""
         return int(-42 - (self.y / ARENA_L) * 28 + random.uniform(-2, 2))
 
+    def antenna(self) -> tuple[float, float]:
+        """Where the RFID antenna actually is — ahead of the rover's centre."""
+        return (self.x + ANTENNA_OFFSET_M * math.sin(self.heading),
+                self.y + ANTENNA_OFFSET_M * math.cos(self.heading))
+
+
+def tag_rssi(rover: Rover, rock: Rock) -> tuple[float, float, float]:
+    """Returns (rssi_dbm, distance_m, bearing_deg) for one rock.
+
+    `rssi` is -inf when the rock is outside the antenna's beam, which is a different
+    failure from being merely far away and is worth keeping distinguishable.
+    """
+    ax, ay = rover.antenna()
+    dx, dy = rock.x - ax, rock.y - ay
+    distance = max(math.hypot(dx, dy), 0.01)
+
+    # Heading is clockwise from downrange, so bearing is the same convention.
+    bearing = math.degrees(math.atan2(dx, dy) - rover.heading)
+    bearing = (bearing + 180.0) % 360.0 - 180.0
+
+    if abs(bearing) > BEAM_HALF_ANGLE_DEG:
+        return (float("-inf"), distance, bearing)
+
+    path = RSSI_AT_REF - PATH_LOSS_EXPONENT_DB * math.log10(distance / REF_DISTANCE_M)
+    off_axis = BEAM_EDGE_LOSS_DB * (abs(bearing) / BEAM_HALF_ANGLE_DEG) ** 2
+    return (path - off_axis, distance, bearing)
+
 
 # ---------------------------------------------------------------------------------
 # The server
@@ -303,6 +390,21 @@ class Simulator:
         # the console's dispatch path.
         self.reader_state = "ready" if "rfid" in self.caps else "absent"
         self._last_tag_sent: dict[str, float] = {}
+
+        self.rocks = default_rocks()
+        for tag_id in (t.strip().upper() for t in args.dead_tags.split(",") if t.strip()):
+            for rock in self.rocks:
+                if rock.tag_id.upper() == tag_id:
+                    rock.dead = True
+
+        # Sensitivity is derived from the requested read range rather than set
+        # independently, so the two can never disagree: "range" means "the distance at
+        # which a boresight read is exactly marginal".
+        self.read_range = args.read_range
+        self.sensitivity = (RSSI_AT_REF - PATH_LOSS_EXPONENT_DB
+                            * math.log10(self.read_range / REF_DISTANCE_M))
+        self.flaky_pct = args.flaky
+        self._last_any_read_t = 0.0
         self.state = "safe"
         self.frames_in = 0
         self.frames_dropped = 0
@@ -334,6 +436,31 @@ class Simulator:
     def broadcast(self, payload: dict) -> None:
         for ws in list(self.clients):
             self.send(ws, payload)
+
+    def find_rock(self, needle: str) -> Rock | None:
+        """Matches a rock by tag ID or by any unique suffix of it, so the runtime
+        switches do not need the full 14 characters typed."""
+        needle = needle.upper()
+        for rock in self.rocks:
+            if rock.tag_id.upper().endswith(needle) or rock.label.upper() == needle:
+                return rock
+        return None
+
+    def set_read_range(self, metres: float) -> None:
+        self.read_range = max(0.02, metres)
+        self.sensitivity = (RSSI_AT_REF - PATH_LOSS_EXPONENT_DB
+                            * math.log10(self.read_range / REF_DISTANCE_M))
+
+    def rock_table(self) -> str:
+        rows = ["    tag            label      dist   bearing    rssi"]
+        for rock in sorted(self.rocks, key=lambda k: math.hypot(k.x - self.rover.x,
+                                                                k.y - self.rover.y)):
+            rssi, distance, bearing = tag_rssi(self.rover, rock)
+            signal = "out of beam" if rssi == float("-inf") else f"{rssi:7.1f} dBm"
+            rows.append(f"    {rock.tag_id} {rock.label:<9} {distance:5.2f} "
+                        f"{bearing:+6.0f}   {signal}"
+                        + ("   DEAD" if rock.dead else ""))
+        return "\n".join(rows)
 
     def emit_tag(self, tag_id: str, rssi: int) -> bool:
         """Reports one tag read, subject to the per-tag rate limit (protocol.md 4.4)."""
@@ -470,12 +597,64 @@ class Simulator:
 
     # -- background loops ----------------------------------------------------------
 
+    async def rfid_loop(self) -> None:
+        """Polls every rock the way the firmware will poll the reader (step 2.6)."""
+        interval = 1.0 / RFID_POLL_HZ
+        while True:
+            await asyncio.sleep(interval)
+            if self.reader_state == "absent" or "rfid" not in self.caps:
+                continue
+
+            now = time.monotonic()
+            any_read = False
+
+            for rock in self.rocks:
+                rssi, distance, _bearing = tag_rssi(self.rover, rock)
+                rock.last_rssi = rssi
+
+                if rock.dead or rssi == float("-inf"):
+                    continue
+
+                margin = rssi - self.sensitivity
+                if margin < 0.0:
+                    continue
+
+                # Ragged at the edge, solid once well inside. A hard cutoff would let the
+                # console assume every approach ends in a clean lock (risk R2).
+                probability = min(1.0, margin / MARGINAL_BAND_DB)
+                if self.flaky_pct:
+                    probability *= max(0.0, 1.0 - self.flaky_pct / 100.0)
+                if random.random() > probability:
+                    continue
+
+                any_read = True
+                rock.last_read_t = now
+                # Rounded to whole dBm, as a real reader reports it.
+                self.emit_tag(rock.tag_id, int(round(rssi)))
+
+            if any_read:
+                self._last_any_read_t = now
+            # Held briefly rather than recomputed per poll: at 20 Hz against a marginal
+            # tag the state would otherwise chatter, and telemetry sampling it at 2 Hz
+            # would report whichever side of the coin it happened to land on.
+            self.reader_state = ("scanning"
+                                 if now - self._last_any_read_t < 0.5 else "ready")
+
     async def physics_loop(self) -> None:
-        dt = 1.0 / PHYSICS_HZ
+        # Integrate over *measured* elapsed time, not the nominal tick. Windows timers
+        # round `asyncio.sleep(0.02)` up to about 31 ms, so advancing a fixed 20 ms per
+        # iteration ran simulated time at roughly two-thirds of wall clock — the rover
+        # arrived where the arithmetic said only about 65% of the time, which made every
+        # timed approach test quietly wrong.
+        target = 1.0 / PHYSICS_HZ
+        previous_t = time.monotonic()
         previous = "safe"
         while True:
-            await asyncio.sleep(dt)
+            await asyncio.sleep(target)
             now = time.monotonic()
+            # Clamped so a stalled process cannot teleport the rover across the arena.
+            dt = min(now - previous_t, 0.25)
+            previous_t = now
             self.state = self.failsafe.state(now)
             if self.state != previous:
                 if previous == "drive":
@@ -520,11 +699,26 @@ class Simulator:
             for c in range(cols):
                 grid[r][c] = "."
 
-        cx = int(self.rover.x / ARENA_W * (cols - 1))
-        cy = int((1.0 - self.rover.y / ARENA_L) * (rows - 1))
+        now = time.monotonic()
+
+        def cell(x: float, y: float) -> tuple[int, int]:
+            return (clamp(int((1.0 - y / ARENA_L) * (rows - 1)), 0, rows - 1),
+                    clamp(int(x / ARENA_W * (cols - 1)), 0, cols - 1))
+
+        # Rocks first, so the rover draws over them rather than under.
+        for rock in self.rocks:
+            r, c = cell(rock.x, rock.y)
+            if now - rock.last_read_t < 0.4:
+                grid[r][c] = "@"  # reading right now
+            elif rock.dead:
+                grid[r][c] = "x"  # dead tag — visible here, invisible to the console
+            else:
+                grid[r][c] = "o"
+
+        r, c = cell(self.rover.x, self.rover.y)
         arrows = "↑↗→↘↓↙←↖"
         index = int(((self.rover.heading + math.pi / 8) % (2 * math.pi)) / (math.pi / 4))
-        grid[clamp(cy, 0, rows - 1)][clamp(cx, 0, cols - 1)] = arrows[index % 8]
+        grid[r][c] = arrows[index % 8]
 
         badge = {"drive": "ARMED", "safe": "SAFE", "incompatible": "INCOMPATIBLE"}
         lines = [
@@ -545,11 +739,28 @@ class Simulator:
             f"  battery  {self.rover.battery_v:5.2f} V     rssi {self.rover.rssi()} dBm",
             f"  clients  {len(self.clients)}   frames in {self.frames_in}"
             f"   dropped {self.frames_dropped}",
-            f"  faults   latency {self.latency_ms} ms   loss {self.loss_pct}%",
-            f"  last     {self.last_event}",
+            f"  faults   latency {self.latency_ms} ms   loss {self.loss_pct}%"
+            f"   flaky {self.flaky_pct}%",
+            f"  reader   {self.reader_state}   range {self.read_range:.2f} m"
+            f"   floor {self.sensitivity:.0f} dBm",
             "",
-            "  type `help` + Enter for runtime switches",
+            "  o rock   @ reading   x dead tag (invisible to the console)",
         ]
+
+        # Nearest few rocks, so the numbers behind the picture are checkable.
+        ranked = sorted(self.rocks, key=lambda k: math.hypot(k.x - self.rover.x,
+                                                             k.y - self.rover.y))
+        for rock in ranked[:4]:
+            rssi, distance, bearing = tag_rssi(self.rover, rock)
+            if rssi == float("-inf"):
+                signal = "  out of beam"
+            else:
+                signal = f"{rssi:6.1f} dBm" + ("" if rssi >= self.sensitivity else "  --")
+            lines.append(f"    {rock.tag_id[-6:]} {rock.label:<9} {distance:4.2f} m "
+                         f"{bearing:+5.0f}deg {signal}"
+                         + ("   DEAD" if rock.dead else ""))
+
+        lines += ["", "  type `help` + Enter for runtime switches"]
         return "\n".join(lines) + "\n"
 
 
@@ -564,8 +775,13 @@ runtime switches:
   drop         hard-disconnect every console right now
   tlm on|off   stop sending telemetry while leaving the link up (stale-frame case)
   ver <n>      change the protocol version advertised, to force a mismatch
-  tag <id> [rssi]   inject one RFID tag read (S.10 makes these happen by driving)
+  tag <id> [rssi]   inject one RFID tag read by hand
   reader <absent|ready|scanning|fault>   force the reported reader state
+  rocks             list the tagged rocks, with distance and signal
+  kill <id>         make a tag dead, as if cooked during embedding (risk R7)
+  revive <id>       undo it
+  range <m>         change the RFID read range
+  flaky <pct>       drop this share of otherwise-good reads
   batt <volts> force the pack voltage, for testing the low-battery display
   reset        recentre the rover and refill the pack
   quit         stop the simulator
@@ -607,6 +823,24 @@ def stdin_reader(sim: Simulator, loop: asyncio.AbstractEventLoop) -> None:
                 else:
                     sim.reader_state = state
                     sim.log(f"reader state now {state}")
+            elif verb == "rocks":
+                sim.log("\n" + sim.rock_table())
+            elif verb in ("kill", "revive") and rest:
+                rock = sim.find_rock(rest[0])
+                if rock is None:
+                    sim.log(f"no rock with tag ending {rest[0]!r}")
+                else:
+                    rock.dead = verb == "kill"
+                    sim.log(f"{rock.tag_id} ({rock.label}) is now "
+                            + ("DEAD — reads exactly like out of range" if rock.dead
+                               else "alive again"))
+            elif verb == "range" and rest:
+                sim.set_read_range(float(rest[0]))
+                sim.log(f"read range now {sim.read_range:.2f} m "
+                        f"(floor {sim.sensitivity:.0f} dBm)")
+            elif verb == "flaky" and rest:
+                sim.flaky_pct = float(rest[0])
+                sim.log(f"flaky now {sim.flaky_pct}%")
             elif verb == "batt" and rest:
                 sim.rover.battery_v = float(rest[0])
                 sim.log(f"battery forced to {sim.rover.battery_v} V")
@@ -639,6 +873,7 @@ async def main_async(args: argparse.Namespace) -> None:
     tasks = [
         asyncio.create_task(sim.physics_loop()),
         asyncio.create_task(sim.telemetry_loop()),
+        asyncio.create_task(sim.rfid_loop()),
     ]
     if args.stall_after:
         tasks.append(asyncio.create_task(stall_later(args.stall_after)))
@@ -680,6 +915,13 @@ def main() -> int:
     parser.add_argument("--protocol-version", type=int, default=PROTOCOL_VERSION,
                         metavar="N",
                         help="version to advertise; set it wrong to force a mismatch")
+    parser.add_argument("--read-range", type=float, default=0.35, metavar="M",
+                        help="distance at which a boresight read is exactly marginal")
+    parser.add_argument("--flaky", type=float, default=0.0, metavar="PCT",
+                        help="drop this share of otherwise-good tag reads")
+    parser.add_argument("--dead-tags", default="", metavar="IDS",
+                        help="comma-separated tag IDs that never read, as if killed "
+                             "during embedding (risk R7)")
     parser.add_argument("--battery-minutes", type=float, default=20.0,
                         help="minutes of full-throttle driving from full to empty")
     args = parser.parse_args()

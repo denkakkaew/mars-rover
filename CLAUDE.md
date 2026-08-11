@@ -76,10 +76,18 @@ console can be developed and demonstrated with no hardware. Install deps once wi
 `python -m pip install -r tools/requirements.txt`, then:
 
 ```powershell
-python tools/fake_rover.py --view                 # ASCII arena, port 81
-python tools/fake_rover.py --latency 250 --loss 5 # start with faults injected
-python tools/fake_rover.py --caps drive,mast,arm  # pretend Phases 2-3 are built
+python tools/fake_rover.py --view                  # ASCII arena, port 81
+python tools/fake_rover.py --latency 250 --loss 5  # start with faults injected
+python tools/fake_rover.py --caps drive,mast,rfid  # pretend Phases 2-3 are built
+python tools/fake_rover.py --read-range 0.5 --flaky 20 --dead-tags E2801160600002
 ```
+
+It carries five **tagged rocks** in the arena and models UHF backscatter well enough to be
+useful: RSSI rising with the fourth power of distance as the rover closes, an antenna beam
+that stops hearing past ±60°, and reads that go ragged near the sensitivity floor rather than
+cutting off cleanly. Driving past a rock loses the read, because the antenna faces forward.
+`--dead-tags` simulates risk R7 — a tag killed during embedding, which reads exactly like a
+tag out of range and is invisible to the console by design.
 
 Point the console at it with `ROVER_URL` rather than editing the scene — the committed
 default in `rover_link.gd` stays the real rover:
@@ -90,10 +98,13 @@ $env:ROVER_URL = "ws://127.0.0.1:81/"
 ```
 
 While it runs, type `help` + Enter for runtime switches: `lat <ms>`, `loss <pct>`, `drop`
-(hard disconnect), `batt <volts>`, `reset`. The simulator mirrors the firmware's strict
-parsing and failsafe deliberately — **it is a second implementation of the same contract**,
-so a behaviour difference between it and `lib/Protocol`/`lib/Safety` means one of them has a
-bug. Keep them in step when the protocol changes.
+(hard disconnect), `tlm on|off`, `ver <n>`, `batt <volts>`, `reset`, plus the RFID ones —
+`rocks`, `kill <id>`, `revive <id>`, `range <m>`, `flaky <pct>`, `tag <id> [rssi]`.
+
+The simulator mirrors the firmware's strict parsing and failsafe deliberately — **it is a
+second implementation of the same contract**, so a behaviour difference between it and
+`lib/Protocol`/`lib/Safety` means one of them has a bug. Keep them in step when the protocol
+changes.
 
 ## Documents and their authority
 
