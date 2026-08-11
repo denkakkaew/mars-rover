@@ -8,10 +8,15 @@ This is a design-and-planning workspace for a proposed educational Mars rover ro
 two scaffolded project skeletons. **No hardware has been procured**, so nothing here has run
 against real motors, servos, or cameras — pin assignments in
 [firmware/include/config.h](firmware/include/config.h) are placeholders to be fixed during
-Phase 1. The repository is **not under version control** (no `git init` yet).
+Phase 1. The repository is under git on branch `main`, with `origin` pointing at
+`https://github.com/denkakkaew/mars-rover`.
+
+Phase S of the implementation plan is in progress: S.1–S.4 are done, so the control protocol
+is frozen in writing and the firmware's parsing and failsafe logic are covered by host tests.
 
 - [plan/](plan/) — the proposal documents (see next section)
 - [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) — the ordered build plan, in small steps
+- [docs/protocol.md](docs/protocol.md) — the frozen console↔rover message contract
 - [console/](console/) — Godot 4 touchscreen operator console
 - [firmware/](firmware/) — PlatformIO / Arduino-ESP32 rover firmware
 
@@ -38,7 +43,8 @@ as a Python module:
 
 ```powershell
 cd firmware
-python -m platformio run                    # build
+python -m platformio run                    # build (esp32dev; it is the default_env)
+python -m platformio test -e native         # host unit tests — no board needed
 python -m platformio run -t upload          # flash (add -t upload -t monitor to do both)
 python -m platformio device monitor         # serial monitor, 115200
 python -m platformio run -t clean
@@ -47,6 +53,16 @@ python -m platformio run -t clean
 The first build downloads the Xtensa toolchain and the pinned libraries. Copy
 `firmware/include/secrets.h.example` to `secrets.h` (gitignored) and fill in real Wi-Fi
 credentials before flashing — the committed placeholder will not associate.
+
+**`python -m platformio test -e native` is the cheapest check on the firmware** and the one
+to run after touching `lib/Protocol` or `lib/Safety` — it exercises the wire format and the
+whole failsafe contract on the PC in about three seconds, with no ESP32 in the loop. It needs
+a host compiler on `PATH`; this machine uses MinGW-w64 GCC from MSYS2 at
+`C:\msys64\ucrt64\bin` (install packages with the full path `C:\msys64\usr\bin\pacman`, which
+is deliberately kept off `PATH` so its Unix `find`/`sort` don't shadow the Windows ones).
+
+Always pass `-e native` to `test`. A bare `pio test` would try to build a test runner for the
+board; `test_ignore = *` on `[env:esp32dev]` blocks that, but the explicit flag is clearer.
 
 ## Documents and their authority
 
@@ -93,22 +109,30 @@ outside. The 1.4 m width constrains chassis footprint and turning radius (risk R
 
 ## Control protocol
 
-JSON text frames over a WebSocket, ESP32 as server on port 81, console as client. Console →
-rover carries a `cmd` discriminator; `drive` is implemented, `mast` and `arm` are accepted
-shapes that the firmware currently logs and ignores until Phases 2–3.
+**[docs/protocol.md](docs/protocol.md) is the authoritative contract** — every message, field,
+unit, and range, plus the failsafe rules. It is frozen at v1. When code and that document
+disagree, the code is wrong; changing the protocol means editing the document first, bumping
+the version, and then changing both codebases. Its §8 tracks what is implemented versus
+specified, and carries the open findings.
+
+In short: JSON text frames over a WebSocket, ESP32 as server on port 81, console as client.
+Console → rover carries a `cmd` discriminator, rover → console carries a `t`. `drive` and
+`stop` are actuated; `mast` and `arm` are accepted shapes the firmware logs and ignores until
+Phases 2–3.
 
 ```
 {"cmd":"drive","l":0.6,"r":-0.6}        # per-side throttle, -1.0 .. 1.0
 {"cmd":"mast","pan":0,"tilt":15}        # degrees
 {"cmd":"arm","joints":[..],"grip":true} # base-outward joint angles
+{"t":"tlm","battery_v":11.8,"mode":"safe","rssi":-58}   # broadcast every 500 ms
 ```
 
-Rover → console is unsolicited telemetry broadcast every 500 ms (`battery_v`, `mode`, `rssi`).
-
-Two safety behaviours are deliberate and must survive refactors: the firmware cuts the motors
-if no command arrives within `COMMAND_TIMEOUT_MS` and on socket disconnect, and the console's
-drive buttons are hold-to-drive (`button_down`/`button_up`), so releasing a finger stops the
-rover. A degraded link must never leave the rover driving into the glass.
+Safety behaviours that are deliberate and must survive refactors: the firmware cuts the motors
+if no command arrives within `COMMAND_TIMEOUT_MS` and on socket disconnect; re-arming requires
+a fresh command, so a reconnect can never resume the last throttle; and the console's drive
+buttons are hold-to-drive (`button_down`/`button_up`), so releasing a finger stops the rover.
+A degraded link must never leave the rover driving into the glass. All of it is covered by
+`test/test_safety` — change the logic and the tests should be what tells you.
 
 ## Code layout conventions
 
@@ -116,6 +140,11 @@ rover. A degraded link must never leave the rover driving into the glass.
   than including `config.h`. Subsystem modules (arm, mast) should stay self-contained the same
   way — §2 of the proposal commits to each subsystem being liftable into a future prototype.
   Only [firmware/src/main.cpp](firmware/src/main.cpp) reads `config.h`.
+- **[firmware/lib/Protocol/](firmware/lib/Protocol/) and
+  [firmware/lib/Safety/](firmware/lib/Safety/) must not include any Arduino header.** That
+  constraint is what lets them build and be tested on the host; `Safety` takes time as a
+  parameter rather than calling `millis()`. Decisions belong in these modules, so put new
+  logic here rather than in `main.cpp`, which is deliberately transport and glue only.
 - `platformio.ini` pins `espressif32@^6.9.0` (arduino-esp32 2.0.x) because `Drive` uses the
   2.x LEDC API (`ledcSetup`/`ledcAttachPin`). Bumping to core 3.x requires switching to
   `ledcAttach`.

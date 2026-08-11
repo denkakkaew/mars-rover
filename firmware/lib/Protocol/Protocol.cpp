@@ -104,6 +104,22 @@ Command parseArm(JsonObjectConst doc) {
   return out;
 }
 
+/// Writes `doc` only if the whole frame fits.
+///
+/// `serializeJson` into a fixed buffer truncates and reports what it managed to write,
+/// which would put a half-finished JSON object on the wire — worse than sending nothing,
+/// because the console would log a parse error instead of a missing frame. So the length
+/// is measured first and a frame that will not fit is refused outright.
+size_t emit(const JsonDocument &doc, char *out, size_t capacity) {
+  if (out == nullptr || capacity == 0) return 0;
+
+  if (measureJson(doc) + 1 > capacity) {
+    out[0] = '\0';
+    return 0;
+  }
+  return serializeJson(doc, out, capacity);
+}
+
 }  // namespace
 
 Command parse(const char *frame, size_t length) {
@@ -199,7 +215,7 @@ size_t serializeTelemetry(const Telemetry &telemetry, char *out, size_t capacity
   doc["battery_v"] = telemetry.battery_v;
   doc["mode"] = modeName(telemetry.mode);
   doc["rssi"] = telemetry.rssi;
-  return serializeJson(doc, out, capacity);
+  return emit(doc, out, capacity);
 }
 
 size_t serializeHello(int version, const char *firmware, const char *const *caps,
@@ -210,14 +226,14 @@ size_t serializeHello(int version, const char *firmware, const char *const *caps
   doc["fw"] = firmware;
   JsonArray list = doc["caps"].to<JsonArray>();
   for (size_t i = 0; i < cap_count; ++i) list.add(caps[i]);
-  return serializeJson(doc, out, capacity);
+  return emit(doc, out, capacity);
 }
 
 size_t serializePong(int64_t ts, char *out, size_t capacity) {
   JsonDocument doc;
   doc["t"] = "pong";
   doc["ts"] = ts;
-  return serializeJson(doc, out, capacity);
+  return emit(doc, out, capacity);
 }
 
 }  // namespace protocol

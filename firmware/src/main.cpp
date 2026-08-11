@@ -45,6 +45,18 @@ const char *const kCapabilities[] = {"drive"};
 // the WebSocket library copies before returning, so there is nothing to overlap.
 char g_out[protocol::kMaxFrameBytes];
 
+/// Sends whatever is in `g_out`. A zero length means the serialiser refused to write a
+/// frame that would not fit; dropping it is correct, since a truncated JSON object would
+/// reach the console as a parse error rather than as an obviously missing frame.
+void sendFrame(uint8_t client, size_t length) {
+  if (length == 0) {
+    log_e("Outbound frame did not fit in %u bytes — dropped",
+          static_cast<unsigned>(sizeof(g_out)));
+    return;
+  }
+  g_server.sendTXT(client, g_out, length);
+}
+
 float readBatteryVolts() {
   const int counts = analogRead(PIN_BATTERY_SENSE);
   return (counts * ADC_REFERENCE_V / ADC_MAX_COUNTS) * BATTERY_DIVIDER_RATIO;
@@ -102,7 +114,7 @@ void handleCommand(uint8_t client, const protocol::Command &cmd, uint32_t now) {
           protocol::serializeHello(protocol::kVersion, FIRMWARE_VERSION, kCapabilities,
                                    sizeof(kCapabilities) / sizeof(kCapabilities[0]),
                                    g_out, sizeof(g_out));
-      g_server.sendTXT(client, g_out, length);
+      sendFrame(client, length);
       break;
     }
 
@@ -110,7 +122,7 @@ void handleCommand(uint8_t client, const protocol::Command &cmd, uint32_t now) {
       // Answered ahead of any queued telemetry, so the figure measures the link rather
       // than our own scheduling (docs/protocol.md 4.3).
       const size_t length = protocol::serializePong(cmd.ts, g_out, sizeof(g_out));
-      g_server.sendTXT(client, g_out, length);
+      sendFrame(client, length);
       break;
     }
 
@@ -170,6 +182,10 @@ void publishTelemetry() {
   telemetry.rssi = WiFi.RSSI();  // Phase 1 checkpoint: signal through the glass (risk R6)
 
   const size_t length = protocol::serializeTelemetry(telemetry, g_out, sizeof(g_out));
+  if (length == 0) {
+    log_e("Telemetry frame did not fit — dropped");
+    return;
+  }
   g_server.broadcastTXT(g_out, length);
 }
 
