@@ -19,6 +19,15 @@ var _reconnect_timer := 0.0
 
 
 func _ready() -> void:
+	# The desktop simulator (tools/fake_rover.py) listens on localhost, not on the
+	# rover's own address. Point the console at it with the ROVER_URL environment
+	# variable rather than editing the scene, so the committed default stays the
+	# real rover.
+	var override := OS.get_environment("ROVER_URL")
+	if override != "":
+		rover_url = override
+		print("Rover link: using ROVER_URL override %s" % rover_url)
+
 	set_process(auto_connect)
 	if auto_connect:
 		connect_to_rover()

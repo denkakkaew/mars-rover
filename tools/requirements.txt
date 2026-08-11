@@ -1,0 +1,5 @@
+# Desktop tooling. Install with:  python -m pip install -r tools/requirements.txt
+# Nothing here ships to the rover — the firmware's only dependencies are in
+# firmware/platformio.ini.
+
+websockets>=14.0    # fake_rover.py uses the asyncio server API added in 14

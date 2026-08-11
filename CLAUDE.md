@@ -64,6 +64,30 @@ is deliberately kept off `PATH` so its Unix `find`/`sort` don't shadow the Windo
 Always pass `-e native` to `test`. A bare `pio test` would try to build a test runner for the
 board; `test_ignore = *` on `[env:esp32dev]` blocks that, but the explicit flag is clearer.
 
+**Fake rover** — [tools/fake_rover.py](tools/fake_rover.py) stands in for the ESP32 so the
+console can be developed and demonstrated with no hardware. Install deps once with
+`python -m pip install -r tools/requirements.txt`, then:
+
+```powershell
+python tools/fake_rover.py --view                 # ASCII arena, port 81
+python tools/fake_rover.py --latency 250 --loss 5 # start with faults injected
+python tools/fake_rover.py --caps drive,mast,arm  # pretend Phases 2-3 are built
+```
+
+Point the console at it with `ROVER_URL` rather than editing the scene — the committed
+default in `rover_link.gd` stays the real rover:
+
+```powershell
+$env:ROVER_URL = "ws://127.0.0.1:81/"
+& $env:GODOT_BIN --path console
+```
+
+While it runs, type `help` + Enter for runtime switches: `lat <ms>`, `loss <pct>`, `drop`
+(hard disconnect), `batt <volts>`, `reset`. The simulator mirrors the firmware's strict
+parsing and failsafe deliberately — **it is a second implementation of the same contract**,
+so a behaviour difference between it and `lib/Protocol`/`lib/Safety` means one of them has a
+bug. Keep them in step when the protocol changes.
+
 ## Documents and their authority
 
 The `plan/` directory holds several renderings of the same proposal at different stages of
