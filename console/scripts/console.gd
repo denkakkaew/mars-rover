@@ -105,6 +105,7 @@ func _ready() -> void:
 	_link.rtt_updated.connect(_on_rtt_updated)
 	_link.tag_read.connect(_on_tag_read)
 	_rtt_log.open()
+	print("Analysis: %s" % _analysis_panel.table_summary())
 	_schedule_touch_audit()
 
 	# Debug affordance, like ROVER_URL and RTT_LOG: CONSOLE_SHOT=<path> captures the
@@ -169,10 +170,8 @@ func _on_rtt_updated(rtt: int, p95: int) -> void:
 	_rtt_log.append(rtt, p95, loss, _last_telemetry)
 
 
-## Logged only, for now. The signal meter and the composition analysis panel are step
-## S.11; this exists so the dispatch path is proven end to end first.
 func _on_tag_read(tag_id: String, rssi: int, rover_ts_ms: int) -> void:
-	print("Tag read: %s  %d dBm  (rover t=%d ms)" % [tag_id, rssi, rover_ts_ms])
+	_analysis_panel.on_tag_read(tag_id, rssi, rover_ts_ms)
 
 
 func _exit_tree() -> void:
@@ -189,8 +188,14 @@ func _notification(what: int) -> void:
 
 func _capture_and_quit(path: String) -> void:
 	# Long enough for the link to come up and telemetry to populate the strip, so the
-	# capture shows a working console rather than its disconnected state.
-	await get_tree().create_timer(4.0).timeout
+	# capture shows a working console rather than its disconnected state. Override with
+	# CONSOLE_SHOT_DELAY when the interesting state takes longer to reach — a tag read,
+	# say, which needs the rover driven across the arena first.
+	var delay := 4.0
+	var override := OS.get_environment("CONSOLE_SHOT_DELAY")
+	if override != "":
+		delay = maxf(0.5, float(override))
+	await get_tree().create_timer(delay).timeout
 	await RenderingServer.frame_post_draw
 	var image := get_viewport().get_texture().get_image()
 	var err := image.save_png(path)

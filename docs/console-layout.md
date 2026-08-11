@@ -103,7 +103,34 @@ which is the payoff for reserving space by *area* rather than by widget.
 |---|---|---|
 | Drive | forward / back / left / right / stop | **live** |
 | Mast | pan left / right, tilt up / down, centre | step 3.4 |
-| Analysis | RFID signal meter, composition report card, session log | step S.11 |
+| Analysis | RFID signal meter, composition report card, session log | **live** (S.11) |
+
+### The analysis panel
+
+Three stacked blocks, top to bottom, matching the order the operator needs them in
+Scenes 5 → 8:
+
+1. **Signal meter** — status line, a bar, and the figure in dBm. Scaled −90 to −40 dBm,
+   fixed rather than derived from the rover, because a bar that rescaled itself would
+   destroy the "getting warmer" cue it exists to provide. The fill is **coloured** as well
+   as sized: the operator is watching the camera monitor, not this panel, and green in
+   peripheral vision means "stop and read".
+2. **Report card** — sample name, mineral class, tag ID, then elements by mass fraction,
+   largest first.
+3. **Session log** — most recent first, five rows shown, with a running count.
+
+Four states worth knowing, all reachable against the simulator:
+
+| State | Shows |
+|---|---|
+| Nothing in range | `NO TAG IN RANGE`, empty grey bar |
+| Reads arriving, not yet confirmed | `SIGNAL acquiring …`, amber bar climbing |
+| Confirmed | `TAG DETECTED …`, green bar, report card, log entry |
+| Reads stopped after a confirmation | `SIGNAL LOST · last result held` — the meter falls to zero but the science stays on screen |
+
+That last one is deliberate. Clearing the readout the instant the rover rolls away would
+throw away Scene 7 just as the operator starts reading it; but leaving the *meter* up would
+claim a signal that is gone. The two are separated on purpose.
 
 The readiness row reports `caps` from the handshake honestly and separately: a rover that
 *has* an RFID reader shows RFID READY even while the console's analysis panel is still a

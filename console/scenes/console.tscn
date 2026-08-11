@@ -1,8 +1,9 @@
-[gd_scene load_steps=4 format=3]
+[gd_scene load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://scripts/console.gd" id="1_console"]
 [ext_resource type="Script" path="res://scripts/rover_link.gd" id="2_link"]
 [ext_resource type="Theme" path="res://theme/console.tres" id="3_theme"]
+[ext_resource type="Script" path="res://scripts/analysis_panel.gd" id="4_analysis"]
 
 [node name="Console" type="Control"]
 layout_mode = 3
@@ -240,24 +241,72 @@ layout_mode = 2
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_stretch_ratio = 0.62
+script = ExtResource("4_analysis")
 
 [node name="Column" type="VBoxContainer" parent="Margin/Layout/Main/AnalysisPanel"]
 layout_mode = 2
-theme_override_constants/separation = 12
+theme_override_constants/separation = 10
 
 [node name="Heading" type="Label" parent="Margin/Layout/Main/AnalysisPanel/Column"]
 layout_mode = 2
 horizontal_alignment = 1
-text = "ANALYSIS  ·  RESERVED S.11"
+text = "ANALYSIS"
 
-[node name="Placeholder" type="Label" parent="Margin/Layout/Main/AnalysisPanel/Column"]
+[node name="Signal" type="VBoxContainer" parent="Margin/Layout/Main/AnalysisPanel/Column"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Status" type="Label" parent="Margin/Layout/Main/AnalysisPanel/Column/Signal"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "NO TAG IN RANGE"
+
+[node name="Bar" type="ProgressBar" parent="Margin/Layout/Main/AnalysisPanel/Column/Signal"]
+custom_minimum_size = Vector2(0, 34)
+layout_mode = 2
+show_percentage = false
+
+[node name="Value" type="Label" parent="Margin/Layout/Main/AnalysisPanel/Column/Signal"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+horizontal_alignment = 2
+text = "--- dBm"
+
+[node name="Rule" type="HSeparator" parent="Margin/Layout/Main/AnalysisPanel/Column"]
+layout_mode = 2
+
+[node name="Report" type="VBoxContainer" parent="Margin/Layout/Main/AnalysisPanel/Column"]
 layout_mode = 2
 size_flags_vertical = 3
-horizontal_alignment = 1
-vertical_alignment = 1
-autowrap_mode = 2
-text = "RFID signal meter
-and elemental composition
-readout land here
+theme_override_constants/separation = 4
 
-(step S.11)"
+[node name="RockName" type="Label" parent="Margin/Layout/Main/AnalysisPanel/Column/Report"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 26
+text = "—"
+
+[node name="RockClass" type="Label" parent="Margin/Layout/Main/AnalysisPanel/Column/Report"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+autowrap_mode = 2
+text = "awaiting a tag read"
+
+[node name="Elements" type="VBoxContainer" parent="Margin/Layout/Main/AnalysisPanel/Column/Report"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="Rule2" type="HSeparator" parent="Margin/Layout/Main/AnalysisPanel/Column"]
+layout_mode = 2
+
+[node name="Log" type="VBoxContainer" parent="Margin/Layout/Main/AnalysisPanel/Column"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="Heading" type="Label" parent="Margin/Layout/Main/AnalysisPanel/Column/Log"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "SESSION LOG  ·  0 identified"
+
+[node name="List" type="VBoxContainer" parent="Margin/Layout/Main/AnalysisPanel/Column/Log"]
+layout_mode = 2
+theme_override_constants/separation = 2

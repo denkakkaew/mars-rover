@@ -16,9 +16,11 @@ UHF RFID reader that identifies rocks in place, and the two cameras are reduced 
 "Documents and their authority" below — several files in this repo still describe the old
 Sample-Return mission.
 
-Phase S of the implementation plan is largely done: S.1–S.8 delivered the protocol contract,
-host-tested firmware modules, a desktop simulator, and a working console — all under
-Revision 1. Steps **S.9–S.11** bring that work onto the revised mission.
+**Phase S is complete (S.1–S.11).** It delivered the protocol contract, host-tested firmware
+modules, a desktop simulator with tagged rocks, and a console that runs the whole
+seek → scan → identify loop against that simulator with no hardware in existence. S.9–S.11
+retargeted the Revision 1 work onto the revised mission. Everything from Phase 0 onward is
+either your decisions or blocked on procurement.
 
 - [plan/](plan/) — the proposal documents (see next section)
 - [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) — the ordered build plan, in small steps
@@ -245,9 +247,20 @@ file, otherwise it lands in the Godot user data folder and the path is printed a
   [docs/console-layout.md](docs/console-layout.md). The audit's millimetre figures are only
   valid from a *windowed* run at the target resolution; headless has no window and reports a
   square viewport, which the audit detects and warns about.
-- Three env vars drive the console for development, none of which change committed defaults:
-  `ROVER_URL` (point at the simulator), `RTT_LOG` (latency CSV path), `CONSOLE_SHOT` (capture
-  a PNG and exit).
+- Env vars drive the console for development, none of which change committed defaults:
+  `ROVER_URL` (point at the simulator), `RTT_LOG` (latency CSV path), `CONSOLE_SHOT` /
+  `CONSOLE_SHOT_DELAY` (capture a PNG after N seconds and exit), `COMPOSITION_TABLE`
+  (alternative tag→composition file).
+- **[console/data/compositions.json](console/data/compositions.json) maps tag ID → simulated
+  elemental composition**, and is console-side on purpose: the rover only ever reports a tag
+  ID, so an arena can be re-dressed and re-tagged without reflashing anything. Lookup order is
+  `$COMPOSITION_TABLE` → `user://compositions.json` → the shipped `res://` copy. The
+  percentages in it are **presets, not measurements** — the console has no spectrometer, and
+  the file says so at the top. Keep it that way.
+- A tag read is not a detection. [analysis_panel.gd](console/scripts/analysis_panel.gd)
+  requires **three reads of the same tag within 1.5 s** before it will declare TAG DETECTED,
+  because Scene 6 asks for "a stable read … not an intermittent or dropped signal" and the
+  simulator produces exactly that ragged stream at the edge of range.
 
 ## Work sequencing
 
