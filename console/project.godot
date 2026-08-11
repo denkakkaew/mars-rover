@@ -12,8 +12,12 @@ config/features=PackedStringArray("4.6", "GL Compatibility")
 
 [display]
 
-window/size/viewport_width=1280
-window/size/viewport_height=800
+; Sized for the assumed console display: a 15.6" 1920x1080 touchscreen (~141 ppi).
+; The panel is not chosen until step 0.4 of IMPLEMENTATION_PLAN.md — console.gd states
+; the assumption in one place and audits every touch target against it at startup, so
+; changing the panel means changing two constants and re-reading the audit.
+window/size/viewport_width=1920
+window/size/viewport_height=1080
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 

@@ -17,6 +17,7 @@ is frozen in writing and the firmware's parsing and failsafe logic are covered b
 - [plan/](plan/) — the proposal documents (see next section)
 - [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) — the ordered build plan, in small steps
 - [docs/protocol.md](docs/protocol.md) — the frozen console↔rover message contract
+- [docs/console-layout.md](docs/console-layout.md) — screen regions, touch sizing, palette
 - [console/](console/) — Godot 4 touchscreen operator console
 - [firmware/](firmware/) — PlatformIO / Arduino-ESP32 rover firmware
 
@@ -189,8 +190,17 @@ file, otherwise it lands in the Godot user data folder and the path is printed a
   `ledcAttach`.
 - LEDC channels 0 and 1 are reserved for the drive motors; servo work must claim its own.
 - [console/scripts/rover_link.gd](console/scripts/rover_link.gd) owns all transport concerns
-  (connect, reconnect, JSON framing); UI scripts call its `send_*` methods and never touch the
-  socket.
+  (connect, reconnect, handshake, JSON framing, the drive repeat, RTT probing); UI scripts
+  call its methods and read its state, and never touch the socket. It exposes `is_linked()`
+  and friends rather than making callers reach into its `State` enum.
+- The console assumes a **15.6" 1920×1080 touchscreen until step 0.4 picks one**, and audits
+  every touch target against a 15 mm minimum at startup — see
+  [docs/console-layout.md](docs/console-layout.md). The audit's millimetre figures are only
+  valid from a *windowed* run at the target resolution; headless has no window and reports a
+  square viewport, which the audit detects and warns about.
+- Three env vars drive the console for development, none of which change committed defaults:
+  `ROVER_URL` (point at the simulator), `RTT_LOG` (latency CSV path), `CONSOLE_SHOT` (capture
+  a PNG and exit).
 
 ## Work sequencing
 

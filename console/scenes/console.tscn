@@ -1,7 +1,8 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene load_steps=4 format=3]
 
 [ext_resource type="Script" path="res://scripts/console.gd" id="1_console"]
 [ext_resource type="Script" path="res://scripts/rover_link.gd" id="2_link"]
+[ext_resource type="Theme" path="res://theme/console.tres" id="3_theme"]
 
 [node name="Console" type="Control"]
 layout_mode = 3
@@ -10,7 +11,17 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
+theme = ExtResource("3_theme")
 script = ExtResource("1_console")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.043, 0.059, 0.078, 1)
 
 [node name="RoverLink" type="Node" parent="."]
 script = ExtResource("2_link")
@@ -22,10 +33,10 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_constants/margin_left = 32
-theme_override_constants/margin_top = 32
-theme_override_constants/margin_right = 32
-theme_override_constants/margin_bottom = 32
+theme_override_constants/margin_left = 28
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 28
+theme_override_constants/margin_bottom = 24
 
 [node name="Layout" type="VBoxContainer" parent="Margin"]
 layout_mode = 2
@@ -36,7 +47,7 @@ layout_mode = 2
 
 [node name="Strip" type="HBoxContainer" parent="Margin/Layout/Telemetry"]
 layout_mode = 2
-theme_override_constants/separation = 40
+theme_override_constants/separation = 36
 
 [node name="LinkLabel" type="Label" parent="Margin/Layout/Telemetry/Strip"]
 layout_mode = 2
@@ -63,7 +74,7 @@ layout_mode = 2
 
 [node name="Row" type="HBoxContainer" parent="Margin/Layout/Readiness"]
 layout_mode = 2
-theme_override_constants/separation = 24
+theme_override_constants/separation = 28
 
 [node name="Title" type="Label" parent="Margin/Layout/Readiness/Row"]
 layout_mode = 2
@@ -89,56 +100,201 @@ size_flags_horizontal = 3
 layout_mode = 2
 text = "FW ---"
 
-[node name="DrivePad" type="GridContainer" parent="Margin/Layout"]
+[node name="Main" type="HBoxContainer" parent="Margin/Layout"]
 layout_mode = 2
 size_flags_vertical = 3
-theme_override_constants/h_separation = 16
-theme_override_constants/v_separation = 16
+theme_override_constants/separation = 16
+
+[node name="MastPanel" type="PanelContainer" parent="Margin/Layout/Main"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_stretch_ratio = 0.62
+
+[node name="Column" type="VBoxContainer" parent="Margin/Layout/Main/MastPanel"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Heading" type="Label" parent="Margin/Layout/Main/MastPanel/Column"]
+layout_mode = 2
+horizontal_alignment = 1
+text = "MAST  ·  RESERVED PHASE 3"
+
+[node name="Grid" type="GridContainer" parent="Margin/Layout/Main/MastPanel/Column"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/h_separation = 12
+theme_override_constants/v_separation = 12
 columns = 3
 
-[node name="SpacerTopLeft" type="Control" parent="Margin/Layout/DrivePad"]
+[node name="MastSpacerTL" type="Control" parent="Margin/Layout/Main/MastPanel/Column/Grid"]
 layout_mode = 2
 
-[node name="Forward" type="Button" parent="Margin/Layout/DrivePad"]
-custom_minimum_size = Vector2(160, 120)
+[node name="TiltUp" type="Button" parent="Margin/Layout/Main/MastPanel/Column/Grid"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+disabled = true
+text = "TILT UP"
+
+[node name="MastSpacerTR" type="Control" parent="Margin/Layout/Main/MastPanel/Column/Grid"]
+layout_mode = 2
+
+[node name="PanLeft" type="Button" parent="Margin/Layout/Main/MastPanel/Column/Grid"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+disabled = true
+text = "PAN L"
+
+[node name="MastCentre" type="Button" parent="Margin/Layout/Main/MastPanel/Column/Grid"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+disabled = true
+text = "CENTRE"
+
+[node name="PanRight" type="Button" parent="Margin/Layout/Main/MastPanel/Column/Grid"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+disabled = true
+text = "PAN R"
+
+[node name="MastSpacerBL" type="Control" parent="Margin/Layout/Main/MastPanel/Column/Grid"]
+layout_mode = 2
+
+[node name="TiltDown" type="Button" parent="Margin/Layout/Main/MastPanel/Column/Grid"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+disabled = true
+text = "TILT DN"
+
+[node name="MastSpacerBR" type="Control" parent="Margin/Layout/Main/MastPanel/Column/Grid"]
+layout_mode = 2
+
+[node name="DrivePanel" type="PanelContainer" parent="Margin/Layout/Main"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_stretch_ratio = 1.0
+
+[node name="Column" type="VBoxContainer" parent="Margin/Layout/Main/DrivePanel"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Heading" type="Label" parent="Margin/Layout/Main/DrivePanel/Column"]
+layout_mode = 2
+horizontal_alignment = 1
+text = "DRIVE"
+
+[node name="DrivePad" type="GridContainer" parent="Margin/Layout/Main/DrivePanel/Column"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/h_separation = 14
+theme_override_constants/v_separation = 14
+columns = 3
+
+[node name="SpacerTopLeft" type="Control" parent="Margin/Layout/Main/DrivePanel/Column/DrivePad"]
+layout_mode = 2
+
+[node name="Forward" type="Button" parent="Margin/Layout/Main/DrivePanel/Column/DrivePad"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 text = "FORWARD"
 
-[node name="SpacerTopRight" type="Control" parent="Margin/Layout/DrivePad"]
+[node name="SpacerTopRight" type="Control" parent="Margin/Layout/Main/DrivePanel/Column/DrivePad"]
 layout_mode = 2
 
-[node name="Left" type="Button" parent="Margin/Layout/DrivePad"]
-custom_minimum_size = Vector2(160, 120)
+[node name="Left" type="Button" parent="Margin/Layout/Main/DrivePanel/Column/DrivePad"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 text = "LEFT"
 
-[node name="Stop" type="Button" parent="Margin/Layout/DrivePad"]
-custom_minimum_size = Vector2(160, 120)
+[node name="Stop" type="Button" parent="Margin/Layout/Main/DrivePanel/Column/DrivePad"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 text = "STOP"
 
-[node name="Right" type="Button" parent="Margin/Layout/DrivePad"]
-custom_minimum_size = Vector2(160, 120)
+[node name="Right" type="Button" parent="Margin/Layout/Main/DrivePanel/Column/DrivePad"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 text = "RIGHT"
 
-[node name="SpacerBottomLeft" type="Control" parent="Margin/Layout/DrivePad"]
+[node name="SpacerBottomLeft" type="Control" parent="Margin/Layout/Main/DrivePanel/Column/DrivePad"]
 layout_mode = 2
 
-[node name="Back" type="Button" parent="Margin/Layout/DrivePad"]
-custom_minimum_size = Vector2(160, 120)
+[node name="Back" type="Button" parent="Margin/Layout/Main/DrivePanel/Column/DrivePad"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 text = "BACK"
 
-[node name="SpacerBottomRight" type="Control" parent="Margin/Layout/DrivePad"]
+[node name="SpacerBottomRight" type="Control" parent="Margin/Layout/Main/DrivePanel/Column/DrivePad"]
 layout_mode = 2
+
+[node name="ArmPanel" type="PanelContainer" parent="Margin/Layout/Main"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_stretch_ratio = 0.62
+
+[node name="Column" type="VBoxContainer" parent="Margin/Layout/Main/ArmPanel"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Heading" type="Label" parent="Margin/Layout/Main/ArmPanel/Column"]
+layout_mode = 2
+horizontal_alignment = 1
+text = "ARM  ·  RESERVED PHASE 2"
+
+[node name="Grid" type="GridContainer" parent="Margin/Layout/Main/ArmPanel/Column"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/h_separation = 12
+theme_override_constants/v_separation = 12
+columns = 2
+
+[node name="Deploy" type="Button" parent="Margin/Layout/Main/ArmPanel/Column/Grid"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+disabled = true
+text = "DEPLOY"
+
+[node name="Stow" type="Button" parent="Margin/Layout/Main/ArmPanel/Column/Grid"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+disabled = true
+text = "STOW"
+
+[node name="Lower" type="Button" parent="Margin/Layout/Main/ArmPanel/Column/Grid"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+disabled = true
+text = "LOWER"
+
+[node name="Lift" type="Button" parent="Margin/Layout/Main/ArmPanel/Column/Grid"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+disabled = true
+text = "LIFT"
+
+[node name="Grip" type="Button" parent="Margin/Layout/Main/ArmPanel/Column/Grid"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+disabled = true
+text = "GRIP"
+
+[node name="Release" type="Button" parent="Margin/Layout/Main/ArmPanel/Column/Grid"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+disabled = true
+text = "RELEASE"

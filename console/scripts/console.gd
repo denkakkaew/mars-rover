@@ -13,6 +13,19 @@ extends Control
 const DRIVE_SPEED := 1.0
 const TURN_SPEED := 0.6
 
+# --- Touch sizing ---------------------------------------------------------------------
+#
+# ASSUMPTION, to be revisited when step 0.4 picks the actual panel: a 15.6" 16:9
+# touchscreen at 1920x1080. That gives a 13.60" x 7.65" active area and ~141 ppi.
+#
+# 15 mm is the smallest target an adult fingertip hits reliably without looking — and the
+# operator will be looking at the camera monitors, not at the console. At 141 ppi that is
+# 15 / 25.4 * 141 = 83 px. Every interactive control is audited against it at startup, so
+# a bad layout reports itself instead of being discovered on the bench.
+const ASSUMED_DIAGONAL_IN := 15.6
+const ASSUMED_ASPECT := Vector2(16.0, 9.0)
+const MIN_TOUCH_MM := 15.0
+
 ## 3S LiPo. Below LOW the operator should be finishing up; below CRITICAL the pack is
 ## into the region where cells start being damaged. Both are provisional until the
 ## divider is calibrated against a meter in step 1.7.
@@ -46,7 +59,9 @@ enum Display { DISCONNECTED, CONNECTING, LINKED, SAFE_MODE, STALE, INCOMPATIBLE 
 @onready var _rssi_label: Label = $Margin/Layout/Telemetry/Strip/RssiLabel
 @onready var _rtt_label: Label = $Margin/Layout/Telemetry/Strip/RttLabel
 @onready var _firmware_label: Label = $Margin/Layout/Readiness/Row/FirmwareLabel
-@onready var _drive_pad: GridContainer = $Margin/Layout/DrivePad
+@onready var _drive_pad: GridContainer = $Margin/Layout/Main/DrivePanel/Column/DrivePad
+@onready var _mast_panel: PanelContainer = $Margin/Layout/Main/MastPanel
+@onready var _arm_panel: PanelContainer = $Margin/Layout/Main/ArmPanel
 
 @onready var _chips := {
 	"drive": $Margin/Layout/Readiness/Row/DriveChip,
@@ -75,6 +90,11 @@ const RttLog := preload("res://scripts/rtt_log.gd")
 var _rtt_log := RttLog.new()
 var _last_telemetry: Dictionary = {}
 
+## Held rather than written straight to the label: the handshake lands before the first
+## telemetry frame, and _refresh() clears the strip while still CONNECTING, so a
+## write-once label got wiped and never came back.
+var _firmware_text := "FW ---"
+
 
 func _ready() -> void:
 	_link.link_state_changed.connect(_on_link_changed)
@@ -83,6 +103,14 @@ func _ready() -> void:
 	_link.handshake_completed.connect(_on_handshake_completed)
 	_link.rtt_updated.connect(_on_rtt_updated)
 	_rtt_log.open()
+	_schedule_touch_audit()
+
+	# Debug affordance, like ROVER_URL and RTT_LOG: CONSOLE_SHOT=<path> captures the
+	# window to a PNG and exits, so the layout can be reviewed without a person sitting
+	# at the screen. Needs a real window — there is nothing to capture headless.
+	var shot := OS.get_environment("CONSOLE_SHOT")
+	if shot != "":
+		_capture_and_quit(shot)
 
 	for button in _drive_pad.get_children():
 		if not (button is Button):
@@ -117,7 +145,7 @@ func _on_stale_changed(_stale: bool) -> void:
 
 
 func _on_handshake_completed(rover_version: int, firmware: String, caps: Array) -> void:
-	_firmware_label.text = "FW %s  v%d  [%s]" % [firmware, rover_version, ", ".join(caps)]
+	_firmware_text = "FW %s  v%d  [%s]" % [firmware, rover_version, ", ".join(caps)]
 	_refresh()
 
 
@@ -141,6 +169,99 @@ func _on_rtt_updated(rtt: int, p95: int) -> void:
 
 func _exit_tree() -> void:
 	_rtt_log.close()
+
+
+## Losing the window mid-press means the release will never arrive, so the repeat would
+## keep driving a rover the operator is no longer looking at. Alt-tab must stop it.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_WM_CLOSE_REQUEST:
+		if is_instance_valid(_link):
+			_link.release_drive()
+
+
+func _capture_and_quit(path: String) -> void:
+	# Long enough for the link to come up and telemetry to populate the strip, so the
+	# capture shows a working console rather than its disconnected state.
+	await get_tree().create_timer(4.0).timeout
+	await RenderingServer.frame_post_draw
+	var image := get_viewport().get_texture().get_image()
+	var err := image.save_png(path)
+	print("Screenshot: %s (%d)" % [path, err])
+	get_tree().quit()
+
+
+# --- Touch-target audit ---------------------------------------------------------------
+
+## Nested containers re-sort over several frames, and measuring before they have settled
+## reports an intermediate layout — which is worse than not measuring, because the numbers
+## look authoritative.
+func _schedule_touch_audit() -> void:
+	await get_tree().create_timer(0.5).timeout
+	_audit_touch_targets()
+
+
+## Pixels per millimetre for the assumed panel, derived rather than hard-coded so that
+## changing the display in step 0.4 changes one constant.
+func _pixels_per_mm() -> float:
+	var px := Vector2(
+		ProjectSettings.get_setting("display/window/size/viewport_width"),
+		ProjectSettings.get_setting("display/window/size/viewport_height"))
+	var diagonal_px: float = px.length()
+	var diagonal_in: float = ASSUMED_DIAGONAL_IN
+	return diagonal_px / (diagonal_in * 25.4)
+
+
+## Reports every interactive control in millimetres and complains about anything under
+## MIN_TOUCH_MM. Runs on every startup, headless included, so the check is part of the
+## smoke run rather than something to remember.
+func _audit_touch_targets() -> void:
+	var ppmm := _pixels_per_mm()
+	var minimum := MIN_TOUCH_MM * ppmm
+	var undersized := 0
+	var lines: Array[String] = []
+
+	for button in _interactive_controls():
+		var size := button.size
+		var ok := size.x >= minimum and size.y >= minimum
+		if not ok:
+			undersized += 1
+		lines.append("    %-10s %4d x %4d px   %5.1f x %5.1f mm   %s" % [
+			button.name, size.x, size.y, size.x / ppmm, size.y / ppmm,
+			"ok" if ok else "UNDERSIZED"])
+
+	var viewport := get_viewport_rect().size
+	print("Touch audit — assuming %.1f\" %dx%d panel, %.2f px/mm, %.0f px minimum"
+			% [ASSUMED_DIAGONAL_IN,
+			ProjectSettings.get_setting("display/window/size/viewport_width"),
+			ProjectSettings.get_setting("display/window/size/viewport_height"),
+			ppmm, minimum])
+	print("    viewport actually %d x %d" % [viewport.x, viewport.y])
+	if absf(viewport.y - float(
+			ProjectSettings.get_setting("display/window/size/viewport_height"))) > 1.0:
+		push_warning("Touch audit: viewport is not the assumed panel size; "
+				+ "the millimetre figures below are not trustworthy")
+	for line in lines:
+		print(line)
+
+	if undersized > 0:
+		push_warning("Touch audit: %d control(s) below %.0f mm" % [undersized, MIN_TOUCH_MM])
+	else:
+		print("    all %d controls clear %.0f mm" % [lines.size(), MIN_TOUCH_MM])
+
+
+func _interactive_controls() -> Array[Button]:
+	var found: Array[Button] = []
+	for root in [_drive_pad, _mast_panel, _arm_panel]:
+		_collect_buttons(root, found)
+	return found
+
+
+func _collect_buttons(node: Node, into: Array[Button]) -> void:
+	for child in node.get_children():
+		if child is Button:
+			into.append(child)
+		elif child is Node:
+			_collect_buttons(child, into)
 
 
 func _on_telemetry_received(data: Dictionary) -> void:
@@ -226,7 +347,17 @@ func _refresh() -> void:
 	_link_label.modulate = colour
 
 	_mode_label.text = "MODE %s" % (_rover_mode.to_upper() if _rover_mode != "" else "---")
-	_mode_label.modulate = COLOR_READY if _rover_mode == "drive" else COLOR_WARN
+	if _rover_mode == "drive":
+		_mode_label.modulate = COLOR_READY
+	elif _rover_mode == "incompatible":
+		_mode_label.modulate = COLOR_FAULT
+	elif _rover_mode == "safe":
+		# Amber only if the failsafe took it out of drive. At rest, before the first
+		# command, safe mode is simply where a healthy rover sits — and Scene 1 wants
+		# this screen to read as ready, not as a warning.
+		_mode_label.modulate = COLOR_WARN if _has_armed else COLOR_IDLE
+	else:
+		_mode_label.modulate = COLOR_IDLE
 
 	if _display == Display.DISCONNECTED or _display == Display.CONNECTING:
 		_battery_label.text = "BATT --.-- V"
@@ -235,10 +366,15 @@ func _refresh() -> void:
 		_rssi_label.modulate = COLOR_IDLE
 		_rtt_label.text = "RTT --- ms"
 		_rtt_label.modulate = COLOR_IDLE
-		_firmware_label.text = "FW ---"
 		_last_telemetry = {}
 		_rover_mode = ""
 		_has_armed = false
+	if _display == Display.DISCONNECTED:
+		# Only on a real drop. Clearing it while CONNECTING would wipe the handshake we
+		# just completed, since the first telemetry frame has not arrived yet.
+		_firmware_text = "FW ---"
+
+	_firmware_label.text = _firmware_text
 
 	_refresh_chips()
 	_refresh_drive_pad()
