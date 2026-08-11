@@ -36,6 +36,10 @@ safety::Failsafe g_failsafe(COMMAND_TIMEOUT_MS);
 safety::State g_state = safety::State::Safe;
 uint32_t g_last_telemetry_ms = 0;
 
+uint32_t g_connected_at_ms = 0;
+bool g_hello_received = false;
+bool g_handshake_expired = false;
+
 // Subsystems this build actually actuates (docs/protocol.md 4.1). "mast" and "arm"
 // join the list when Phases 3 and 2 wire the servos up; until then the console greys
 // those controls out rather than sending commands into a void.
@@ -100,7 +104,9 @@ void handleCommand(uint8_t client, const protocol::Command &cmd, uint32_t now) {
       log_e("Console speaks protocol v%d, rover speaks v%d — refusing to arm",
             cmd.version, protocol::kVersion);
     }
+    g_hello_received = true;
     g_failsafe.setPeerCompatible(compatible);
+    g_failsafe.setHandshakeOk(compatible);
   }
 
   if (protocol::refreshesFailsafe(cmd.type)) {
@@ -154,6 +160,9 @@ void onWebSocketEvent(uint8_t client, WStype_t type, uint8_t *payload, size_t le
   switch (type) {
     case WStype_CONNECTED:
       log_i("Console %u connected", client);
+      g_connected_at_ms = now;
+      g_hello_received = false;
+      g_handshake_expired = false;
       g_failsafe.onConnect();
       applyState(g_failsafe.state(now));
       break;
@@ -213,6 +222,18 @@ void loop() {
   g_server.loop();
 
   const uint32_t now = millis();
+
+  // A console that never identifies itself is treated as an unknown protocol version
+  // (docs/protocol.md 5). Nothing could have armed in the meantime — Safety refuses to
+  // arm without a handshake — so this only changes what the telemetry strip reports,
+  // from "safe" to "incompatible", which is the difference between the operator seeing
+  // "it is waiting" and "it will never move".
+  if (g_failsafe.inputs().connected && !g_hello_received && !g_handshake_expired &&
+      safety::timedOut(g_connected_at_ms, now, HANDSHAKE_DEADLINE_MS)) {
+    g_handshake_expired = true;
+    log_e("No hello within %u ms — refusing to arm", HANDSHAKE_DEADLINE_MS);
+    g_failsafe.setPeerCompatible(false);
+  }
 
   // Re-evaluated every pass, so the command timeout trips on its own without needing
   // an inbound frame to notice it.

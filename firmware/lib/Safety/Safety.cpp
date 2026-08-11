@@ -14,6 +14,9 @@ State evaluate(const Inputs &in) {
   // No console, no authority to move.
   if (!in.connected) return State::Safe;
 
+  // An unidentified console is not one to take commands from.
+  if (!in.handshake_ok) return State::Safe;
+
   // Boot, or a fresh connection: safe until commanded. This is the rule that stops the
   // rover lurching back into motion the instant Wi-Fi recovers.
   if (!in.commanded_since_connect) return State::Safe;
@@ -29,11 +32,14 @@ Failsafe::Failsafe(uint32_t timeout_ms) { in_.timeout_ms = timeout_ms; }
 void Failsafe::onConnect() {
   in_.connected = true;
   in_.commanded_since_connect = false;
+  in_.handshake_ok = false;
+  in_.peer_compatible = true;  // a new console gets a fresh chance to identify itself
 }
 
 void Failsafe::onDisconnect() {
   in_.connected = false;
   in_.commanded_since_connect = false;
+  in_.handshake_ok = false;
 }
 
 void Failsafe::onCommand(uint32_t now_ms) {
@@ -42,6 +48,8 @@ void Failsafe::onCommand(uint32_t now_ms) {
 }
 
 void Failsafe::setPeerCompatible(bool compatible) { in_.peer_compatible = compatible; }
+
+void Failsafe::setHandshakeOk(bool ok) { in_.handshake_ok = ok; }
 
 State Failsafe::state(uint32_t now_ms) const {
   Inputs snapshot = in_;

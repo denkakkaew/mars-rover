@@ -41,3 +41,8 @@ constexpr char FIRMWARE_VERSION[] = "0.1.0";
 constexpr uint32_t COMMAND_TIMEOUT_MS = 500;
 
 constexpr uint32_t TELEMETRY_INTERVAL_MS = 500;
+
+// A console that has not identified itself with `hello` this long after connecting is
+// treated as an unknown protocol version and refused (docs/protocol.md 5). Mirrored by
+// HANDSHAKE_DEADLINE_S in tools/fake_rover.py.
+constexpr uint32_t HANDSHAKE_DEADLINE_MS = 2000;

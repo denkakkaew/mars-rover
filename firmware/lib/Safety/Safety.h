@@ -31,7 +31,14 @@ struct Inputs {
   uint32_t now_ms = 0;
   uint32_t timeout_ms = 500;
 
-  /// False once a `hello` with the wrong version has been seen (protocol.md 5).
+  /// Whether a matching `hello` has been exchanged on this connection. Nothing moves
+  /// before it has: a console that has not identified itself is not one to take
+  /// commands from, and failing closed here is what makes the handshake deadline a
+  /// safety property rather than a log message (protocol.md 5).
+  bool handshake_ok = false;
+
+  /// False once a `hello` with the wrong version has been seen, or once the deadline
+  /// for hearing one has passed (protocol.md 5).
   bool peer_compatible = true;
 };
 
@@ -63,6 +70,10 @@ class Failsafe {
   /// Records the outcome of a `hello` handshake. Once false, only a matching `hello`
   /// clears it — no command, reconnect, or timeout can.
   void setPeerCompatible(bool compatible);
+
+  /// Marks the handshake as agreed. Cleared automatically on connect and disconnect,
+  /// so every new connection has to identify itself again.
+  void setHandshakeOk(bool ok);
 
   State state(uint32_t now_ms) const;
 

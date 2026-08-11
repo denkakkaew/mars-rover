@@ -307,13 +307,22 @@ rather than the rover's own scheduling.
    v1" diagnoses itself; "LINK ERROR" does not.
 3. Sends no further commands except `stop`.
 
-**If the console sends no `hello` within 2000 ms** of the socket opening, the rover treats the
-peer as an unknown version and behaves exactly as on mismatch. An old console that has never
+**Nothing moves before the handshake agrees.** The rover refuses to arm until it has
+exchanged a matching `hello` on the *current* connection, whatever commands arrive in the
+meantime. Until then it reports `mode: "safe"` — it is waiting, not broken.
+
+**If the console sends no `hello` within 2000 ms** of the socket opening, the rover stops
+waiting and reports `mode: "incompatible"`, which is the difference between the operator
+reading "it hasn't started yet" and "it is never going to move". An old console that has never
 heard of `hello` therefore fails closed, not open.
 
 The mismatch state is **not** safe mode: safe mode is cleared by the next valid command, while
-an incompatible peer can only be resolved by reflashing or updating one side. They are
-deliberately distinct `mode` values for that reason.
+an incompatible peer is not cleared by driving at it or by waiting. They are deliberately
+distinct `mode` values for that reason.
+
+**A new connection does clear it.** The handshake is scoped to the connection, so a correct
+console can take over from a wrong one without power-cycling the rover. This is not a
+loophole — the replacement connection must complete its own handshake before anything moves.
 
 ---
 
@@ -430,56 +439,55 @@ hardware — the ✅ rows mean "written and matches this document", not "proven"
 
 | Message | Firmware | Console | Notes |
 |---|---|---|---|
+A third implementation now exists: [tools/fake_rover.py](../tools/fake_rover.py) speaks the
+rover half of this document for desktop development, and is held deliberately in step with the
+firmware. A behaviour difference between them means one of the two has a bug.
+
+| Message | Firmware | Console | Notes |
+|---|---|---|---|
 | `drive` | ✅ | ✅ | Shapes verified identical against this doc |
-| `stop` | ✅ | ❌ | Firmware handles it; `rover_link.gd` has no sender — see F2 below |
+| `stop` | ✅ | ✅ | F2 closed in S.6 — `send_stop()`, wired to the STOP button |
 | `mast` | ⚠️ accepted, logged, ignored | ✅ sender exists | Actuated in step 3.4 |
 | `arm` | ⚠️ accepted, logged, ignored | ✅ sender exists | Actuated in step 2.3 |
-| `hello` (both directions) | ✅ | ❌ | Rover parses it, replies with `caps`, and refuses to arm on a version mismatch. Console sender lands in S.6. |
-| No-`hello` deadline (§5) | ⚠️ **not armed** | — | The 2000 ms fail-closed rule is deliberately not enforced yet: today's console never sends `hello`, so arming it now would lock out the only console that exists. Turned on in S.6, together with the console sender. |
-| `ping` / `pong` | ✅ | ❌ | Rover echoes `ts` unmodified. Console side is step **S.7**. |
-| `tlm` | ✅ tagged `"t":"tlm"` | ⚠️ **ignores `t`** | Firmware half of F1 closed in S.3; console still treats any dictionary as telemetry |
+| `hello` (both directions) | ✅ | ✅ | Console sends it on connect and retries every 1 s until answered; rover replies with `caps` and refuses to arm on a mismatch |
+| Handshake gate (§5) | ✅ **armed** | ✅ | Rover will not arm without a matching `hello` on the current connection; the 2000 ms deadline then flips telemetry to `incompatible`. Both closed in S.6. |
+| `ping` / `pong` | ✅ | ⚠️ recognised, unused | Rover echoes `ts` unmodified; the console dispatches `pong` but does nothing with it until step **S.7** |
+| `tlm` | ✅ tagged `"t":"tlm"` | ✅ dispatches on `t` | F1 closed: the console routes by discriminator, so a `pong` can no longer land in the telemetry strip |
 | Failsafe timeout + disconnect (§6.2) | ✅ `lib/Safety` | — | 500 ms; extracted to a pure function in S.3, unit-tested in S.4 |
 | Re-arm rule (§6.3) | ✅ `lib/Safety` | — | Scoped to the connection, so a reconnect inside the timeout window cannot arm |
 | Strict parsing (§2.5, §1) | ✅ `lib/Protocol` | — | Wrong types and oversize frames rejected whole; F4 closed in S.3 |
-| Command repeat (§6.5) | — | ❌ | **See F3 — this is a live defect** |
+| Command repeat (§6.5) | — | ✅ | F3 closed in S.6 — `rover_link.gd` repeats a held drive command every 150 ms |
+| Drive pad gating (§6.4) | — | ✅ | Buttons disabled unless the link is live and telemetry fresh |
 
-### Findings raised by writing this document
+### Findings raised while writing and implementing this document
 
-Recorded rather than silently fixed, because each is a change to working code and the plan
-reviews one step at a time.
+**All four are now closed.** Kept here because each one records a decision, and because the
+same mistakes are easy to reintroduce.
 
-**F3 — the console never repeats a held drive command.** *(Real defect, drive-affecting.)*
-[console.gd:34-35](../console/scripts/console.gd#L34-L35) connects `button_down` and
-`button_up` and nothing else — no timer, no `_process`. So holding FORWARD sends exactly one
-frame, and [main.cpp:117](../firmware/src/main.cpp#L117) cuts the motors 500 ms later. On real
-hardware the rover would crawl for half a second and stop, with the operator's finger still
-down. §6.5 is the fix; it needs a repeat timer console-side. Naturally belongs with the S.6
-link-state work, or can be fixed on its own now.
+**F3 — the console never repeated a held drive command.** *(Closed in S.6.)* `console.gd`
+connected `button_down` and `button_up` and nothing else, so holding FORWARD sent exactly one
+frame and the rover cut the motors 500 ms later. Measured against the simulator before the
+fix: one tap moved the rover **~0.06 m of the 3.0 m arena** and stopped, with the operator's
+finger still down. `rover_link.gd` now owns the repeat at 150 ms (§6.5), which took the same
+2-second hold to ~0.44 m.
 
-**F1 — rover → console frames have no discriminator.** *(Firmware half closed in S.3.)*
-The firmware now tags every frame — `"t":"tlm"`, `"t":"hello"`, `"t":"pong"` — but
-[rover_link.gd:81-87](../console/scripts/rover_link.gd#L81-L87) still forwards *any* parsed
-dictionary to the telemetry strip without looking at `t`. Harmless while the console sends no
-`hello` and no `ping`, since telemetry is then the only frame it can receive; it becomes a
-real bug the moment S.7 adds pings. Console-side dispatch on `t` is S.6 work.
+**F1 — rover → console frames had no discriminator.** *(Closed: firmware S.3, console S.6.)*
+Both sides now tag and dispatch on `t`. Before, the console forwarded *any* parsed dictionary
+to the telemetry strip, which would have displayed S.7's `pong` frames as telemetry.
 
-**F2 — no console-side `stop` sender.** The firmware accepts `stop`; `rover_link.gd` has
-`send_drive`, `send_mast`, and `send_arm` but no `send_stop`. The drive pad's STOP button sends
-`drive 0,0` instead, which does halt the rover, so nothing is broken today — but §3.3's
-distinction is not available to the console. A three-line addition, best made when S.6 gives
-it a caller.
+**F2 — no console-side `stop` sender.** *(Closed in S.6.)* `rover_link.gd` gained
+`send_stop()`, and the STOP button calls it instead of sending `drive 0,0`.
 
 **F4 — parsing was more permissive than §2.5 and §1 require.** *(Closed in S.3.)* The old
 `doc["l"] | 0.0f` leaned on ArduinoJson's implicit conversion, so `{"l":"0.6"}` was coerced to
 `0.6` rather than dropped, and there was no frame-size check. `protocol::parse` now rejects
 both, along with wrong-typed angles, non-boolean `grip`, and a `joints` array that is empty or
 over-long — and decodes joints into a scratch array first, so a bad angle halfway along cannot
-leave the earlier joints applied. S.4 adds the tests.
+leave the earlier joints applied.
 
-**Status:** F4 is closed; F1 is closed firmware-side; F2 and F3 are open and both live in the
-console. None of the four was ever a shape mismatch — **every field of every message both
-sides implement matches this document exactly**, which is what step S.2's verification asked
-for.
+None of the four was ever a shape mismatch — **every field of every message every
+implementation sends matches this document exactly**, which is what step S.2's verification
+asked for.
 
 ---
 

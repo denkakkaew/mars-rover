@@ -29,26 +29,61 @@ theme_override_constants/margin_bottom = 32
 
 [node name="Layout" type="VBoxContainer" parent="Margin"]
 layout_mode = 2
-theme_override_constants/separation = 24
+theme_override_constants/separation = 16
 
 [node name="Telemetry" type="PanelContainer" parent="Margin/Layout"]
 layout_mode = 2
 
 [node name="Strip" type="HBoxContainer" parent="Margin/Layout/Telemetry"]
 layout_mode = 2
-theme_override_constants/separation = 48
+theme_override_constants/separation = 40
 
 [node name="LinkLabel" type="Label" parent="Margin/Layout/Telemetry/Strip"]
 layout_mode = 2
 text = "LINK DOWN"
 
+[node name="ModeLabel" type="Label" parent="Margin/Layout/Telemetry/Strip"]
+layout_mode = 2
+text = "MODE ---"
+
 [node name="BatteryLabel" type="Label" parent="Margin/Layout/Telemetry/Strip"]
 layout_mode = 2
 text = "BATT --.-- V"
 
-[node name="ModeLabel" type="Label" parent="Margin/Layout/Telemetry/Strip"]
+[node name="RssiLabel" type="Label" parent="Margin/Layout/Telemetry/Strip"]
 layout_mode = 2
-text = "MODE ---"
+text = "RSSI --- dBm"
+
+[node name="Readiness" type="PanelContainer" parent="Margin/Layout"]
+layout_mode = 2
+
+[node name="Row" type="HBoxContainer" parent="Margin/Layout/Readiness"]
+layout_mode = 2
+theme_override_constants/separation = 24
+
+[node name="Title" type="Label" parent="Margin/Layout/Readiness/Row"]
+layout_mode = 2
+text = "SUBSYSTEMS"
+
+[node name="DriveChip" type="Label" parent="Margin/Layout/Readiness/Row"]
+layout_mode = 2
+text = "DRIVE ----"
+
+[node name="ArmChip" type="Label" parent="Margin/Layout/Readiness/Row"]
+layout_mode = 2
+text = "ARM ----"
+
+[node name="MastChip" type="Label" parent="Margin/Layout/Readiness/Row"]
+layout_mode = 2
+text = "MAST ----"
+
+[node name="Spacer" type="Control" parent="Margin/Layout/Readiness/Row"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="FirmwareLabel" type="Label" parent="Margin/Layout/Readiness/Row"]
+layout_mode = 2
+text = "FW ---"
 
 [node name="DrivePad" type="GridContainer" parent="Margin/Layout"]
 layout_mode = 2

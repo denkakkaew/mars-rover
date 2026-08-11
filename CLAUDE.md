@@ -151,12 +151,21 @@ Phases 2–3.
 {"t":"tlm","battery_v":11.8,"mode":"safe","rssi":-58}   # broadcast every 500 ms
 ```
 
-Safety behaviours that are deliberate and must survive refactors: the firmware cuts the motors
-if no command arrives within `COMMAND_TIMEOUT_MS` and on socket disconnect; re-arming requires
-a fresh command, so a reconnect can never resume the last throttle; and the console's drive
-buttons are hold-to-drive (`button_down`/`button_up`), so releasing a finger stops the rover.
-A degraded link must never leave the rover driving into the glass. All of it is covered by
-`test/test_safety` — change the logic and the tests should be what tells you.
+Safety behaviours that are deliberate and must survive refactors:
+
+- The firmware cuts the motors if no valid command arrives within `COMMAND_TIMEOUT_MS`, and on
+  socket disconnect.
+- **Nothing arms without a `hello` handshake on the current connection**, so an unidentified
+  console gets no actuation at all.
+- Re-arming requires a fresh command, so a reconnect can never resume the last throttle.
+- The console's drive buttons are hold-to-drive, and `rover_link.gd` **repeats the held
+  command every 150 ms** — without that the failsafe cuts the motors mid-press. The repeat
+  interval is chosen against `COMMAND_TIMEOUT_MS`; changing one means rechecking the other.
+- The drive pad is disabled unless the link is live and telemetry fresh, so a dead console
+  cannot look drivable.
+
+A degraded link must never leave the rover driving into the glass. All of the firmware side is
+covered by `test/test_safety` — change the logic and the tests should be what tells you.
 
 ## Code layout conventions
 

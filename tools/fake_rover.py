@@ -45,6 +45,9 @@ MAX_FRAME_BYTES = 512
 MAX_ARM_JOINTS = 4
 COMMAND_TIMEOUT_S = 0.500
 TELEMETRY_INTERVAL_S = 0.500
+# A console that never identifies itself is treated as an unknown version
+# (protocol.md 5). Mirrors HANDSHAKE_DEADLINE_MS in firmware/include/config.h.
+HANDSHAKE_DEADLINE_S = 2.0
 
 # Commands that count as proof of a live console (protocol.md 6.2). Note the absentees:
 # ping and hello do not keep the motors alive.
@@ -192,14 +195,18 @@ class Failsafe:
     commanded_since_connect: bool = False
     last_command_t: float = 0.0
     peer_compatible: bool = True
+    handshake_ok: bool = False
 
     def on_connect(self) -> None:
         self.connected = True
         self.commanded_since_connect = False
+        self.handshake_ok = False
+        self.peer_compatible = True
 
     def on_disconnect(self) -> None:
         self.connected = False
         self.commanded_since_connect = False
+        self.handshake_ok = False
 
     def on_command(self, now: float) -> None:
         self.last_command_t = now
@@ -209,6 +216,10 @@ class Failsafe:
         if not self.peer_compatible:
             return "incompatible"
         if not self.connected:
+            return "safe"
+        # Nothing moves until the console has identified itself. Failing closed here is
+        # what makes the 2 s deadline a safety property rather than a log message.
+        if not self.handshake_ok:
             return "safe"
         if not self.commanded_since_connect:
             return "safe"
@@ -300,6 +311,8 @@ class Simulator:
         self.loss_pct = args.loss
         self.drop_after = args.drop_after
         self.caps = [c.strip() for c in args.caps.split(",") if c.strip()]
+        self.version = args.protocol_version
+        self.telemetry_on = True
         self.quiet = args.quiet
         self.state = "safe"
         self.frames_in = 0
@@ -343,6 +356,7 @@ class Simulator:
 
         if self.drop_after:
             asyncio.create_task(self._drop_later(ws, self.drop_after))
+        asyncio.create_task(self._expire_handshake(ws))
 
         try:
             async for raw in ws:
@@ -373,20 +387,21 @@ class Simulator:
             return
 
         if cmd.kind == "hello":
-            compatible = cmd.version == PROTOCOL_VERSION
+            compatible = cmd.version == self.version
             self.failsafe.peer_compatible = compatible
+            self.failsafe.handshake_ok = compatible
             if compatible:
                 self.log(f"handshake ok — console speaks v{cmd.version}")
             else:
                 self.log(
                     f"version mismatch: console v{cmd.version}, rover "
-                    f"v{PROTOCOL_VERSION} — refusing to arm"
+                    f"v{self.version} — refusing to arm"
                 )
             self.send(
                 ws,
                 {
                     "t": "hello",
-                    "v": PROTOCOL_VERSION,
+                    "v": self.version,
                     "fw": FIRMWARE_VERSION,
                     "caps": self.caps,
                 },
@@ -421,15 +436,35 @@ class Simulator:
                 if cmd.grip is not None:
                     self.rover.grip = cmd.grip
 
+    async def _expire_handshake(self, ws) -> None:
+        """A console that never says hello is treated as an unknown version."""
+        await asyncio.sleep(HANDSHAKE_DEADLINE_S)
+        if ws in self.clients and not self.failsafe.handshake_ok:
+            self.failsafe.peer_compatible = False
+            self.log(f"no hello within {HANDSHAKE_DEADLINE_S:g}s — refusing to arm")
+
+    def hard_close(self, ws) -> None:
+        """Abort the TCP connection with no close handshake.
+
+        This is the failure worth rehearsing: the rover going out of range or losing
+        power does not send a courteous close frame. A clean `close()` would exercise a
+        gentler path than the one that actually happens, and 1006 is a reserved code the
+        library refuses to put on the wire anyway.
+        """
+        try:
+            ws.transport.abort()
+        except AttributeError:
+            asyncio.create_task(ws.close(code=1001))
+
     async def _drop_later(self, ws, seconds: float) -> None:
         await asyncio.sleep(seconds)
         if ws in self.clients:
             self.log(f"injected hard disconnect after {seconds:g}s")
-            await ws.close(code=1006)
+            self.hard_close(ws)
 
     async def drop_all(self) -> None:
         for ws in list(self.clients):
-            await ws.close(code=1006)
+            self.hard_close(ws)
 
     # -- background loops ----------------------------------------------------------
 
@@ -449,6 +484,8 @@ class Simulator:
     async def telemetry_loop(self) -> None:
         while True:
             await asyncio.sleep(TELEMETRY_INTERVAL_S)
+            if not self.telemetry_on:
+                continue  # link stays up, frames stop: the stale-telemetry case
             frame = {
                 "t": "tlm",
                 "battery_v": round(self.rover.battery_v, 2),
@@ -525,6 +562,8 @@ runtime switches:
   lat <ms>     inject link latency (applied half each way, so RTT rises by <ms>)
   loss <pct>   drop this percentage of frames in both directions
   drop         hard-disconnect every console right now
+  tlm on|off   stop sending telemetry while leaving the link up (stale-frame case)
+  ver <n>      change the protocol version advertised, to force a mismatch
   batt <volts> force the pack voltage, for testing the low-battery display
   reset        recentre the rover and refill the pack
   quit         stop the simulator
@@ -549,6 +588,12 @@ def stdin_reader(sim: Simulator, loop: asyncio.AbstractEventLoop) -> None:
             elif verb == "drop":
                 asyncio.run_coroutine_threadsafe(sim.drop_all(), loop)
                 sim.log("hard disconnect injected")
+            elif verb == "tlm" and rest:
+                sim.telemetry_on = rest[0].lower() in ("on", "1", "true")
+                sim.log(f"telemetry {'on' if sim.telemetry_on else 'off'}")
+            elif verb == "ver" and rest:
+                sim.version = int(rest[0])
+                sim.log(f"advertising protocol v{sim.version} — reconnect to apply")
             elif verb == "batt" and rest:
                 sim.rover.battery_v = float(rest[0])
                 sim.log(f"battery forced to {sim.rover.battery_v} V")
@@ -573,10 +618,17 @@ async def main_async(args: argparse.Namespace) -> None:
 
     threading.Thread(target=stdin_reader, args=(sim, loop), daemon=True).start()
 
+    async def stall_later(seconds: float) -> None:
+        await asyncio.sleep(seconds)
+        sim.telemetry_on = False
+        sim.log(f"telemetry stalled after {seconds:g}s — link left up")
+
     tasks = [
         asyncio.create_task(sim.physics_loop()),
         asyncio.create_task(sim.telemetry_loop()),
     ]
+    if args.stall_after:
+        tasks.append(asyncio.create_task(stall_later(args.stall_after)))
     if args.view:
         tasks.append(asyncio.create_task(sim.view_loop()))
 
@@ -608,8 +660,13 @@ def main() -> int:
                         help="percentage of frames dropped in both directions")
     parser.add_argument("--drop-after", type=float, default=0.0, metavar="SEC",
                         help="hard-disconnect a console this long after it connects")
+    parser.add_argument("--stall-after", type=float, default=0.0, metavar="SEC",
+                        help="stop sending telemetry this long after start, link left up")
     parser.add_argument("--caps", default="drive",
                         help="subsystems to advertise, e.g. drive,mast,arm")
+    parser.add_argument("--protocol-version", type=int, default=PROTOCOL_VERSION,
+                        metavar="N",
+                        help="version to advertise; set it wrong to force a mismatch")
     parser.add_argument("--battery-minutes", type=float, default=20.0,
                         help="minutes of full-throttle driving from full to empty")
     args = parser.parse_args()
