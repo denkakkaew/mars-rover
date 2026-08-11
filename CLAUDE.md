@@ -167,6 +167,12 @@ Safety behaviours that are deliberate and must survive refactors:
 A degraded link must never leave the rover driving into the glass. All of the firmware side is
 covered by `test/test_safety` — change the logic and the tests should be what tells you.
 
+**Control-latency target, agreed at S.7: 95th-percentile RTT ≤ 100 ms, hard ceiling 250 ms**
+(docs/protocol.md §4.4). This is the pass/fail line for risk R1 at steps 1.8 and 3.3. The
+console measures continuously and writes every sample to CSV — set `RTT_LOG` to choose the
+file, otherwise it lands in the Godot user data folder and the path is printed at startup.
+**Keep those CSVs**: 3.3's whole purpose is comparing its distribution against 1.8's.
+
 ## Code layout conventions
 
 - [firmware/lib/Drive/](firmware/lib/Drive/) takes its pins through the constructor rather

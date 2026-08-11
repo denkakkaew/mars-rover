@@ -282,6 +282,29 @@ and needs no version bump (§2.3).
 Replied to immediately, ahead of any queued telemetry, so the measurement reflects the link
 rather than the rover's own scheduling.
 
+### 4.4 Latency target
+
+Agreed at step S.7, before any hardware existed, so that steps 1.8 and 3.3 measure against a
+number rather than against an opinion formed after seeing the result. **This is the pass/fail
+line for risk R1.**
+
+| | Value | Why |
+|---|---|---|
+| **Target** | 95th percentile ≤ **100 ms** | Below this, driving feels immediate and Scene 5 fine alignment is precise |
+| **Ceiling** | 95th percentile ≤ **250 ms** | Half the 500 ms command timeout. Past it, ordinary jitter starts tripping the failsafe mid-drive, so it is a hard limit rather than a comfort one |
+| **Loss** | < 1% of probes unanswered | Above this the 150 ms command repeat stops covering the gaps |
+
+The **percentile**, not the mean: fine alignment is ruined by the occasional 400 ms sample, not
+by a good average. The console colours its readout on p95 for the same reason.
+
+Measured on the simulator at step S.7, the console-to-rover baseline is **~7 ms**, leaving
+roughly 93 ms of headroom for real Wi-Fi and two concurrent camera streams. Every run since
+S.7 writes samples to CSV in one fixed format (`console/scripts/rtt_log.gd`), so the idle-link
+distribution from 1.8 and the both-feeds-live distribution from 3.3 can be compared directly.
+
+If 3.3 misses this, the fallbacks in priority order are: reduce video bitrate → move video to
+5 GHz if the cameras support it → Bluetooth control fallback per storyboard §4.3.
+
 ---
 
 ## 5. Versioning
@@ -451,7 +474,7 @@ firmware. A behaviour difference between them means one of the two has a bug.
 | `arm` | ⚠️ accepted, logged, ignored | ✅ sender exists | Actuated in step 2.3 |
 | `hello` (both directions) | ✅ | ✅ | Console sends it on connect and retries every 1 s until answered; rover replies with `caps` and refuses to arm on a mismatch |
 | Handshake gate (§5) | ✅ **armed** | ✅ | Rover will not arm without a matching `hello` on the current connection; the 2000 ms deadline then flips telemetry to `incompatible`. Both closed in S.6. |
-| `ping` / `pong` | ✅ | ⚠️ recognised, unused | Rover echoes `ts` unmodified; the console dispatches `pong` but does nothing with it until step **S.7** |
+| `ping` / `pong` | ✅ | ✅ | Console probes at 4 Hz and reports current RTT, rolling p95, and probe loss; samples go to CSV. Closed in S.7. |
 | `tlm` | ✅ tagged `"t":"tlm"` | ✅ dispatches on `t` | F1 closed: the console routes by discriminator, so a `pong` can no longer land in the telemetry strip |
 | Failsafe timeout + disconnect (§6.2) | ✅ `lib/Safety` | — | 500 ms; extracted to a pure function in S.3, unit-tested in S.4 |
 | Re-arm rule (§6.3) | ✅ `lib/Safety` | — | Scoped to the connection, so a reconnect inside the timeout window cannot arm |
@@ -499,7 +522,7 @@ Deliberately unresolved, each with the step that closes it.
 |---|---|---|
 | 1 | `mast` pan/tilt ranges are placeholders | Step 2.2 — measured mechanical limits |
 | 2 | Arm joint count (3 or 4) and per-joint ranges | Steps 0.1, 2.2 |
-| 3 | Round-trip latency **target** — a number to test against | Step S.7 |
+| ~~3~~ | ~~Round-trip latency target~~ — **agreed at S.7: p95 ≤ 100 ms, ceiling 250 ms (§4.4)** | Closed |
 | 4 | Whether the mission/run state of Phase 4 rides this socket or stays console-only | Step 4.2 |
 | 5 | Bluetooth fallback framing, if Wi-Fi proves inadequate | Step 3.3 decision point |
 

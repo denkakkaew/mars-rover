@@ -54,6 +54,10 @@ text = "BATT --.-- V"
 layout_mode = 2
 text = "RSSI --- dBm"
 
+[node name="RttLabel" type="Label" parent="Margin/Layout/Telemetry/Strip"]
+layout_mode = 2
+text = "RTT --- ms"
+
 [node name="Readiness" type="PanelContainer" parent="Margin/Layout"]
 layout_mode = 2
 

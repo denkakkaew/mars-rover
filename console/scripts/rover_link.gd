@@ -13,6 +13,7 @@ signal link_state_changed(new_state: State)
 signal telemetry_received(data: Dictionary)
 signal handshake_completed(rover_version: int, firmware: String, caps: Array)
 signal telemetry_stale_changed(stale: bool)
+signal rtt_updated(rtt_ms: int, p95_ms: int)
 
 enum State {
 	DISCONNECTED,  ## No socket.
@@ -40,6 +41,19 @@ const DRIVE_REPEAT_SEC := 0.15
 ## Telemetry arrives every 500 ms; three missed frames means something is wrong.
 const TELEMETRY_STALE_SEC := 1.5
 
+## Round-trip probes, four a second. Frequent enough to build a percentile in under a
+## minute, and cheap: a ping/pong pair is under 70 bytes on a channel that carries
+## nothing else (docs/protocol.md 1.1). `ping` deliberately does not refresh the rover's
+## failsafe, so probing an idle rover cannot arm it.
+const PING_INTERVAL_SEC := 0.25
+
+## A pong later than this is counted as lost rather than measured. Well beyond the
+## 500 ms command timeout — anything this late already cost us the link.
+const PING_TIMEOUT_SEC := 2.0
+
+## Samples kept for the percentile: 240 at 4 Hz is a rolling minute.
+const RTT_WINDOW := 240
+
 @export var rover_url := "ws://192.168.4.1:81/"
 @export var auto_connect := true
 
@@ -47,6 +61,12 @@ var state: State = State.DISCONNECTED
 var rover_version := 0
 var rover_firmware := ""
 var rover_caps: Array = []
+
+## Most recent round trip, the rolling 95th percentile, and the share of probes that
+## never came back. -1 means "not measured yet". Risk R1 is judged on these.
+var rtt_ms := -1
+var rtt_p95_ms := -1
+var rtt_loss_pct := 0.0
 
 var _socket := WebSocketPeer.new()
 var _reconnect_timer := 0.0
@@ -59,6 +79,12 @@ var _had_telemetry := false
 var _holding := false
 var _hold_left := 0.0
 var _hold_right := 0.0
+
+var _ping_timer := 0.0
+var _outstanding: Dictionary = {}  ## ping timestamp -> the same value, awaiting its pong
+var _samples: Array[int] = []
+var _pings_sent := 0
+var _pongs_lost := 0
 
 
 func _ready() -> void:
@@ -194,6 +220,7 @@ func _process(delta: float) -> void:
 				_handle_packet(_socket.get_packet().get_string_from_utf8())
 			_service_handshake(delta)
 			_service_drive_repeat(delta)
+			_service_ping(delta)
 
 		WebSocketPeer.STATE_CLOSED:
 			if state != State.DISCONNECTED:
@@ -241,7 +268,7 @@ func _handle_packet(text: String) -> void:
 		"hello":
 			_handle_hello(frame)
 		"pong":
-			pass  # Round-trip measurement arrives in step S.7.
+			_handle_pong(frame)
 		_:
 			push_warning("Rover link: unrecognised frame type: %s" % text)
 
@@ -272,6 +299,64 @@ func _service_handshake(delta: float) -> void:
 		_send({"cmd": "hello", "v": PROTOCOL_VERSION})
 
 
+## Round-trip probing. The timestamp we send is our own clock, echoed back untouched, so
+## the whole measurement happens on this side and the two clocks never need to agree
+## (docs/protocol.md 3.6).
+func _service_ping(delta: float) -> void:
+	if state != State.LINKED:
+		return
+
+	_ping_timer -= delta
+	if _ping_timer <= 0.0:
+		_ping_timer = PING_INTERVAL_SEC
+		var ts := Time.get_ticks_msec()
+		_outstanding[ts] = ts
+		_pings_sent += 1
+		_send({"cmd": "ping", "ts": ts})
+
+	_expire_pings()
+
+
+func _expire_pings() -> void:
+	var cutoff := Time.get_ticks_msec() - int(PING_TIMEOUT_SEC * 1000.0)
+	for ts in _outstanding.keys():
+		if ts < cutoff:
+			_outstanding.erase(ts)
+			_pongs_lost += 1
+			_update_loss()
+
+
+func _handle_pong(frame: Dictionary) -> void:
+	var ts := int(frame.get("ts", -1))
+	if not _outstanding.has(ts):
+		# Already written off as lost, or not a probe of ours. Counting it now would
+		# make the loss figure lie in the flattering direction.
+		return
+	_outstanding.erase(ts)
+
+	rtt_ms = Time.get_ticks_msec() - ts
+	_samples.append(rtt_ms)
+	if _samples.size() > RTT_WINDOW:
+		_samples.pop_front()
+
+	rtt_p95_ms = _percentile(_samples, 0.95)
+	_update_loss()
+	rtt_updated.emit(rtt_ms, rtt_p95_ms)
+
+
+func _percentile(values: Array[int], fraction: float) -> int:
+	if values.is_empty():
+		return -1
+	var sorted := values.duplicate()
+	sorted.sort()
+	var index := int(ceil(fraction * sorted.size())) - 1
+	return sorted[clampi(index, 0, sorted.size() - 1)]
+
+
+func _update_loss() -> void:
+	rtt_loss_pct = 0.0 if _pings_sent == 0 else 100.0 * float(_pongs_lost) / float(_pings_sent)
+
+
 func _service_drive_repeat(delta: float) -> void:
 	if not _holding:
 		return
@@ -297,6 +382,18 @@ func _reset_session() -> void:
 	_handshake_timer = 0.0
 	_since_telemetry = 0.0
 	_had_telemetry = false
+
+	# RTT statistics are per-connection: mixing samples from before and after a dropout
+	# would average away the very event worth seeing.
+	_ping_timer = 0.0
+	_outstanding.clear()
+	_samples.clear()
+	_pings_sent = 0
+	_pongs_lost = 0
+	rtt_ms = -1
+	rtt_p95_ms = -1
+	rtt_loss_pct = 0.0
+
 	rover_version = 0
 	rover_firmware = ""
 	rover_caps = []

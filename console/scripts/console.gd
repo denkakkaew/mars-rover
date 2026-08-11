@@ -19,6 +19,17 @@ const TURN_SPEED := 0.6
 const BATTERY_LOW_V := 11.1
 const BATTERY_CRITICAL_V := 10.5
 
+## Control-latency target, agreed at step S.7 and the number steps 1.8 and 3.3 are
+## measured against. The 95th percentile is what matters, not the average: fine
+## alignment in Scene 5 is ruined by the occasional 400 ms sample, not by the mean.
+##
+## Below the target, driving feels immediate. Between target and ceiling it is workable
+## but no longer precise. The ceiling is half the rover's 500 ms command timeout — past
+## that, ordinary jitter starts tripping the failsafe mid-drive, so it is a hard limit
+## rather than a comfort one.
+const RTT_TARGET_MS := 100
+const RTT_CEILING_MS := 250
+
 const COLOR_READY := Color("3ddc84")
 const COLOR_WARN := Color("ffb300")
 const COLOR_FAULT := Color("ff5252")
@@ -33,6 +44,7 @@ enum Display { DISCONNECTED, CONNECTING, LINKED, SAFE_MODE, STALE, INCOMPATIBLE 
 @onready var _mode_label: Label = $Margin/Layout/Telemetry/Strip/ModeLabel
 @onready var _battery_label: Label = $Margin/Layout/Telemetry/Strip/BatteryLabel
 @onready var _rssi_label: Label = $Margin/Layout/Telemetry/Strip/RssiLabel
+@onready var _rtt_label: Label = $Margin/Layout/Telemetry/Strip/RttLabel
 @onready var _firmware_label: Label = $Margin/Layout/Readiness/Row/FirmwareLabel
 @onready var _drive_pad: GridContainer = $Margin/Layout/DrivePad
 
@@ -59,12 +71,18 @@ var _rover_mode := ""
 ## a different thing, and the one worth showing loudly.
 var _has_armed := false
 
+const RttLog := preload("res://scripts/rtt_log.gd")
+var _rtt_log := RttLog.new()
+var _last_telemetry: Dictionary = {}
+
 
 func _ready() -> void:
 	_link.link_state_changed.connect(_on_link_changed)
 	_link.telemetry_received.connect(_on_telemetry_received)
 	_link.telemetry_stale_changed.connect(_on_stale_changed)
 	_link.handshake_completed.connect(_on_handshake_completed)
+	_link.rtt_updated.connect(_on_rtt_updated)
+	_rtt_log.open()
 
 	for button in _drive_pad.get_children():
 		if not (button is Button):
@@ -103,7 +121,30 @@ func _on_handshake_completed(rover_version: int, firmware: String, caps: Array) 
 	_refresh()
 
 
+func _on_rtt_updated(rtt: int, p95: int) -> void:
+	var loss: float = _link.rtt_loss_pct
+	_rtt_label.text = "RTT %d ms  p95 %d" % [rtt, p95]
+	if loss >= 1.0:
+		_rtt_label.text += "  loss %.0f%%" % loss
+
+	# Coloured on the percentile, not the latest sample, so the strip reports the link's
+	# behaviour rather than flickering on one unlucky frame.
+	if p95 > RTT_CEILING_MS:
+		_rtt_label.modulate = COLOR_FAULT
+	elif p95 > RTT_TARGET_MS:
+		_rtt_label.modulate = COLOR_WARN
+	else:
+		_rtt_label.modulate = COLOR_READY
+
+	_rtt_log.append(rtt, p95, loss, _last_telemetry)
+
+
+func _exit_tree() -> void:
+	_rtt_log.close()
+
+
 func _on_telemetry_received(data: Dictionary) -> void:
+	_last_telemetry = data
 	_rover_mode = str(data.get("mode", ""))
 	if _rover_mode == "drive":
 		_has_armed = true
@@ -192,7 +233,10 @@ func _refresh() -> void:
 		_battery_label.modulate = COLOR_IDLE
 		_rssi_label.text = "RSSI --- dBm"
 		_rssi_label.modulate = COLOR_IDLE
+		_rtt_label.text = "RTT --- ms"
+		_rtt_label.modulate = COLOR_IDLE
 		_firmware_label.text = "FW ---"
+		_last_telemetry = {}
 		_rover_mode = ""
 		_has_armed = false
 
