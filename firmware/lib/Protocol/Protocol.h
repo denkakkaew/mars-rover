@@ -19,9 +19,9 @@ constexpr int kVersion = 1;
 /// Frames larger than this are dropped whole, never partially applied (protocol.md 1).
 constexpr size_t kMaxFrameBytes = 512;
 
-/// Upper bound on the arm's joint count. The real count is fixed in Phase 0 and is
-/// checked by the Arm module, not here — this is only the buffer size.
-constexpr uint8_t kMaxArmJoints = 4;
+/// Longest tag EPC we will carry, in hex characters (protocol.md 4.4). Generous: a 96-bit
+/// EPC is 24 characters. The real reader's format is confirmed at step 2.1.
+constexpr size_t kMaxTagIdChars = 64;
 
 enum class CommandType : uint8_t {
   Malformed,  ///< Did not parse, or a field was the wrong type. Dropped whole.
@@ -30,19 +30,17 @@ enum class CommandType : uint8_t {
   Drive,
   Stop,
   Mast,
-  Arm,
   Ping,
 };
 
 /// Why a frame was rejected. Diagnostic only — every value means "dropped".
 enum class ParseError : uint8_t {
   None,
-  TooLarge,       ///< Over kMaxFrameBytes
-  BadJson,        ///< Not valid JSON
-  NotAnObject,    ///< Valid JSON, but not an object
-  MissingCmd,     ///< No `cmd`, or `cmd` was not a string
-  BadField,       ///< A known field carried the wrong type (protocol.md 2.5)
-  BadJointCount,  ///< `joints` was empty or longer than kMaxArmJoints
+  TooLarge,     ///< Over kMaxFrameBytes
+  BadJson,      ///< Not valid JSON
+  NotAnObject,  ///< Valid JSON, but not an object
+  MissingCmd,   ///< No `cmd`, or `cmd` was not a string
+  BadField,     ///< A known field carried the wrong type (protocol.md 2.5)
 };
 
 /// One decoded console -> rover frame. Fields are only meaningful for their own `type`.
@@ -60,11 +58,6 @@ struct Command {
   float pan_deg = 0.0f;
   float tilt_deg = 0.0f;
 
-  uint8_t joint_count = 0;  ///< Arm: 0 means "hold the joints"
-  float joints[kMaxArmJoints] = {};
-  bool has_grip = false;
-  bool grip_closed = false;
-
   int64_t ts = 0;  ///< Ping: opaque console timestamp, echoed back unmodified
 };
 
@@ -72,7 +65,7 @@ struct Command {
 /// and never returns a partially applied Command — a bad field yields Malformed.
 Command parse(const char *frame, size_t length);
 
-/// True for the commands that count as proof of a live console: drive, stop, mast, arm.
+/// True for the commands that count as proof of a live console: drive, stop, mast.
 /// Deliberately false for ping and hello — a console that can ping but not drive is not
 /// a console that should keep the motors live (protocol.md 6.2).
 bool refreshesFailsafe(CommandType type);
@@ -89,10 +82,30 @@ enum class Mode : uint8_t {
 
 const char *modeName(Mode mode);
 
+/// RFID reader state, reported in every telemetry frame (protocol.md 4.2). Scene 1 needs
+/// the reader to go green before the mission starts, so "not fitted" and "fitted but
+/// broken" have to be distinguishable.
+enum class ReaderState : uint8_t {
+  Absent,    ///< No reader on this build
+  Ready,     ///< Up and answering, no tag in range
+  Scanning,  ///< A tag is being read right now
+  Fault,     ///< Fitted but not responding, or reporting an error
+};
+
+const char *readerStateName(ReaderState state);
+
 struct Telemetry {
   float battery_v = 0.0f;  ///< Pack volts. Uncalibrated until step 1.7.
   Mode mode = Mode::Safe;
-  int rssi = 0;  ///< dBm
+  int rssi = 0;  ///< Wi-Fi link strength, dBm. Not the RFID RSSI.
+  ReaderState reader = ReaderState::Absent;
+};
+
+/// One RFID tag read (protocol.md 4.4).
+struct TagRead {
+  const char *id = "";  ///< EPC as uppercase hex. Opaque — never interpreted here.
+  int rssi = 0;         ///< Reader signal strength for this read, dBm. The proximity cue.
+  uint32_t ts_ms = 0;   ///< Rover uptime at the read
 };
 
 /// Each writes a complete frame plus a null terminator into `out` and returns the byte
@@ -101,5 +114,10 @@ size_t serializeTelemetry(const Telemetry &telemetry, char *out, size_t capacity
 size_t serializeHello(int version, const char *firmware, const char *const *caps,
                       size_t cap_count, char *out, size_t capacity);
 size_t serializePong(int64_t ts, char *out, size_t capacity);
+
+/// Returns 0 for an empty or over-long `id` as well as for a short buffer — a tag frame
+/// with no usable ID is worse than no frame, since the console would log a read it cannot
+/// attribute to a rock.
+size_t serializeTagRead(const TagRead &read, char *out, size_t capacity);
 
 }  // namespace protocol

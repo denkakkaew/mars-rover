@@ -61,12 +61,13 @@ enum Display { DISCONNECTED, CONNECTING, LINKED, SAFE_MODE, STALE, INCOMPATIBLE 
 @onready var _firmware_label: Label = $Margin/Layout/Readiness/Row/FirmwareLabel
 @onready var _drive_pad: GridContainer = $Margin/Layout/Main/DrivePanel/Column/DrivePad
 @onready var _mast_panel: PanelContainer = $Margin/Layout/Main/MastPanel
-@onready var _arm_panel: PanelContainer = $Margin/Layout/Main/ArmPanel
+@onready var _analysis_panel: PanelContainer = $Margin/Layout/Main/AnalysisPanel
 
+## Scene 1 gates the mission on drive, mast and the RFID reader all reporting green.
 @onready var _chips := {
 	"drive": $Margin/Layout/Readiness/Row/DriveChip,
-	"arm": $Margin/Layout/Readiness/Row/ArmChip,
 	"mast": $Margin/Layout/Readiness/Row/MastChip,
+	"rfid": $Margin/Layout/Readiness/Row/RfidChip,
 }
 
 ## Drive pad button name -> (left wheel throttle, right wheel throttle).
@@ -102,6 +103,7 @@ func _ready() -> void:
 	_link.telemetry_stale_changed.connect(_on_stale_changed)
 	_link.handshake_completed.connect(_on_handshake_completed)
 	_link.rtt_updated.connect(_on_rtt_updated)
+	_link.tag_read.connect(_on_tag_read)
 	_rtt_log.open()
 	_schedule_touch_audit()
 
@@ -165,6 +167,12 @@ func _on_rtt_updated(rtt: int, p95: int) -> void:
 		_rtt_label.modulate = COLOR_READY
 
 	_rtt_log.append(rtt, p95, loss, _last_telemetry)
+
+
+## Logged only, for now. The signal meter and the composition analysis panel are step
+## S.11; this exists so the dispatch path is proven end to end first.
+func _on_tag_read(tag_id: String, rssi: int, rover_ts_ms: int) -> void:
+	print("Tag read: %s  %d dBm  (rover t=%d ms)" % [tag_id, rssi, rover_ts_ms])
 
 
 func _exit_tree() -> void:
@@ -251,7 +259,7 @@ func _audit_touch_targets() -> void:
 
 func _interactive_controls() -> Array[Button]:
 	var found: Array[Button] = []
-	for root in [_drive_pad, _mast_panel, _arm_panel]:
+	for root in [_drive_pad, _mast_panel, _analysis_panel]:
 		_collect_buttons(root, found)
 	return found
 

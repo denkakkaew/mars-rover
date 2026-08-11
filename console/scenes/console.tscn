@@ -84,13 +84,13 @@ text = "SUBSYSTEMS"
 layout_mode = 2
 text = "DRIVE ----"
 
-[node name="ArmChip" type="Label" parent="Margin/Layout/Readiness/Row"]
-layout_mode = 2
-text = "ARM ----"
-
 [node name="MastChip" type="Label" parent="Margin/Layout/Readiness/Row"]
 layout_mode = 2
 text = "MAST ----"
+
+[node name="RfidChip" type="Label" parent="Margin/Layout/Readiness/Row"]
+layout_mode = 2
+text = "RFID ----"
 
 [node name="Spacer" type="Control" parent="Margin/Layout/Readiness/Row"]
 layout_mode = 2
@@ -236,65 +236,28 @@ text = "BACK"
 [node name="SpacerBottomRight" type="Control" parent="Margin/Layout/Main/DrivePanel/Column/DrivePad"]
 layout_mode = 2
 
-[node name="ArmPanel" type="PanelContainer" parent="Margin/Layout/Main"]
+[node name="AnalysisPanel" type="PanelContainer" parent="Margin/Layout/Main"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_stretch_ratio = 0.62
 
-[node name="Column" type="VBoxContainer" parent="Margin/Layout/Main/ArmPanel"]
+[node name="Column" type="VBoxContainer" parent="Margin/Layout/Main/AnalysisPanel"]
 layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="Heading" type="Label" parent="Margin/Layout/Main/ArmPanel/Column"]
+[node name="Heading" type="Label" parent="Margin/Layout/Main/AnalysisPanel/Column"]
 layout_mode = 2
 horizontal_alignment = 1
-text = "ARM  ·  RESERVED PHASE 2"
+text = "ANALYSIS  ·  RESERVED S.11"
 
-[node name="Grid" type="GridContainer" parent="Margin/Layout/Main/ArmPanel/Column"]
+[node name="Placeholder" type="Label" parent="Margin/Layout/Main/AnalysisPanel/Column"]
 layout_mode = 2
 size_flags_vertical = 3
-theme_override_constants/h_separation = 12
-theme_override_constants/v_separation = 12
-columns = 2
+horizontal_alignment = 1
+vertical_alignment = 1
+autowrap_mode = 2
+text = "RFID signal meter
+and elemental composition
+readout land here
 
-[node name="Deploy" type="Button" parent="Margin/Layout/Main/ArmPanel/Column/Grid"]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
-disabled = true
-text = "DEPLOY"
-
-[node name="Stow" type="Button" parent="Margin/Layout/Main/ArmPanel/Column/Grid"]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
-disabled = true
-text = "STOW"
-
-[node name="Lower" type="Button" parent="Margin/Layout/Main/ArmPanel/Column/Grid"]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
-disabled = true
-text = "LOWER"
-
-[node name="Lift" type="Button" parent="Margin/Layout/Main/ArmPanel/Column/Grid"]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
-disabled = true
-text = "LIFT"
-
-[node name="Grip" type="Button" parent="Margin/Layout/Main/ArmPanel/Column/Grid"]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
-disabled = true
-text = "GRIP"
-
-[node name="Release" type="Button" parent="Margin/Layout/Main/ArmPanel/Column/Grid"]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
-disabled = true
-text = "RELEASE"
+(step S.11)"

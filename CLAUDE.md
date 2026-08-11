@@ -170,11 +170,11 @@ disagree, the code is wrong; changing the protocol means editing the document fi
 the version, and then changing every implementation. Its §8 tracks what is implemented versus
 specified, and carries the open findings.
 
-⚠️ **The contract still describes Revision 1.** It defines an `arm` command that no longer
-exists and has no tag-read frame. Step **S.9** of the implementation plan revises it — drop
-`arm`, add the tag-read path and reader status, change `caps` from `drive, mast, arm` to
-`drive, mast, rfid`. Until S.9 lands, `arm` remains in the protocol, the firmware, the
-simulator and `rover_link.gd` as dead but harmless scaffolding. Don't build on it.
+Retargeted to Revision 2 at step S.9: the `arm` command is gone, the `tag` frame (§4.4) and
+the `rfid` reader-status field (§4.2) are in, and `caps` is now `drive, mast, rfid`. **The
+version stayed at 1** — §5 of the contract shows message by message why none of that was a
+breaking change, which is the payoff of two S.2 decisions (unknown verbs are non-fatal,
+capabilities are discovered in the handshake rather than hard-coded).
 
 In short: JSON text frames over a WebSocket, ESP32 as server on port 81, console as client.
 Console → rover carries a `cmd` discriminator, rover → console carries a `t`. `drive` and
@@ -184,8 +184,8 @@ Phases 2–3.
 ```
 {"cmd":"drive","l":0.6,"r":-0.6}        # per-side throttle, -1.0 .. 1.0
 {"cmd":"mast","pan":0,"tilt":15}        # degrees
-{"cmd":"arm","joints":[..],"grip":true} # base-outward joint angles
-{"t":"tlm","battery_v":11.8,"mode":"safe","rssi":-58}   # broadcast every 500 ms
+{"t":"tlm","battery_v":11.8,"mode":"safe","rssi":-58,"rfid":"ready"}   # every 500 ms
+{"t":"tag","id":"E2801160600002","rssi":-47,"ts":184320}   # unsolicited, per read
 ```
 
 Safety behaviours that are deliberate and must survive refactors:

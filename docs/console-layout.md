@@ -49,12 +49,15 @@ Touch audit — assuming 15.6" 1920x1080 panel, 5.56 px/mm, 83 px minimum
     TiltUp      167 x  258 px    30.0 x  46.4 mm   ok
     PanLeft     137 x  257 px    24.6 x  46.2 mm   ok
     ...
-    all 16 controls clear 15 mm
+    all 10 controls clear 15 mm
 ```
 
 The smallest control is `PanLeft` at **24.6 mm**, still 1.6× the minimum. Drive buttons are
 44.8 × 46.0 mm, roughly three times the minimum in each axis, because they are the ones
 pressed under time pressure.
+
+The count dropped from 16 to 10 at step S.9, when Revision 2 removed the arm and its six
+buttons. The analysis panel that replaced them has no touch targets of its own yet.
 
 The audit warns and marks its own figures untrustworthy if the viewport is not the assumed
 size — which is what happens in a headless run, where there is no window and the viewport
@@ -67,18 +70,18 @@ run at the target resolution.**
 +------------------------------------------------------------------------------+
 | TELEMETRY STRIP            link · mode · battery · rssi · rtt/p95             |  ~72 px
 +------------------------------------------------------------------------------+
-| SUBSYSTEMS   drive · arm · mast                              firmware / caps  |  ~72 px
+| SUBSYSTEMS   drive · mast · rfid                             firmware / caps  |  ~72 px
 +---------------------+--------------------------------+-----------------------+
 |                     |                                |                       |
-|  MAST               |  DRIVE                         |  ARM                  |
-|  reserved, Phase 3  |  live now                      |  reserved, Phase 2    |
+|  MAST               |  DRIVE                         |  ANALYSIS             |
+|  reserved, step 3.4 |  live now                      |  reserved, step S.11  |
 |                     |                                |                       |
-|      [ TILT UP ]    |         [ FORWARD ]            |  [ DEPLOY ] [ STOW  ] |
+|      [ TILT UP ]    |         [ FORWARD ]            |     signal meter      |
 |                     |                                |                       |
-| [PAN L][CTR][PAN R] |   [ LEFT ][ STOP ][ RIGHT ]    |  [ LOWER  ] [ LIFT  ] |  ~840 px
-|                     |                                |                       |
-|      [ TILT DN ]    |         [  BACK  ]             |  [ GRIP   ] [RELEASE] |
-|                     |                                |                       |
+| [PAN L][CTR][PAN R] |   [ LEFT ][ STOP ][ RIGHT ]    |     composition       |  ~840 px
+|                     |                                |      report card      |
+|      [ TILT DN ]    |         [  BACK  ]             |                       |
+|                     |                                |      session log      |
 |   507 px / 0.62     |        818 px / 1.00           |    507 px / 0.62      |
 +---------------------+--------------------------------+-----------------------+
 ```
@@ -87,20 +90,25 @@ Widths are `size_flags_stretch_ratio` on three panels in one `HBoxContainer`, so
 holds at any resolution. Drive gets the centre and the largest share; the two hands rest
 naturally on the outer panels.
 
-**The reserved panels are not placeholders — they are the real control sets, disabled.**
-Every button that Phases 2 and 3 need is already present, named, and sized, which is the
-point: adding the behaviour later is wiring up existing controls, not a redesign. The
-storyboard §5.1 control list is complete on screen today:
+**The mast panel is not a placeholder — it is the real control set, disabled.** Every button
+step 3.4 needs is already present, named, and sized, so adding the behaviour is wiring up
+existing controls rather than a redesign.
 
-| Region | Controls | Arrives at |
+**The analysis panel is different: it is a display, not controls**, so there are no touch
+targets to pre-size — only the region to reserve. It held the arm controls until proposal
+Revision 2 removed the manipulator (step S.9); the region survived the mission change intact,
+which is the payoff for reserving space by *area* rather than by widget.
+
+| Region | Contents | Arrives at |
 |---|---|---|
 | Drive | forward / back / left / right / stop | **live** |
 | Mast | pan left / right, tilt up / down, centre | step 3.4 |
-| Arm | deploy / stow, lower / lift, grip / release | step 2.6 |
+| Analysis | RFID signal meter, composition report card, session log | step S.11 |
 
 The readiness row reports `caps` from the handshake honestly and separately: a rover that
-*has* an arm shows ARM READY even while the console's arm panel is still disabled. Hardware
-presence and console support are different facts and are displayed as such.
+*has* an RFID reader shows RFID READY even while the console's analysis panel is still a
+placeholder. Hardware presence and console support are different facts and are displayed as
+such.
 
 ## 4. Palette
 

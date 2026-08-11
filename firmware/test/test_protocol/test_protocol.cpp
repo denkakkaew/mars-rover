@@ -259,62 +259,19 @@ void test_mast_rejects_wrong_type(void) {
 }
 
 // ---------------------------------------------------------------------------------
-// arm
+// arm — retired with the manipulator in proposal Revision 2 (step S.9)
 // ---------------------------------------------------------------------------------
 
-void test_arm_valid(void) {
+void test_arm_is_now_an_unknown_verb(void) {
+  // Dropping a command must not become a *breaking* change: §2.2 says an unrecognised
+  // `cmd` is logged and ignored, never fatal. That is the whole reason removing the arm
+  // needed no protocol version bump — an old console still sending `arm` is tolerated,
+  // it just gets nothing. This test is what keeps that promise true.
   const protocol::Command cmd =
       parseText("{\"cmd\":\"arm\",\"joints\":[0,45,90],\"grip\":true}");
-  ASSERT_TYPE(protocol::CommandType::Arm, cmd);
-  TEST_ASSERT_EQUAL_UINT8(3, cmd.joint_count);
-  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.0f, cmd.joints[0]);
-  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 45.0f, cmd.joints[1]);
-  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 90.0f, cmd.joints[2]);
-  TEST_ASSERT_TRUE(cmd.has_grip);
-  TEST_ASSERT_TRUE(cmd.grip_closed);
-}
-
-void test_arm_grip_only(void) {
-  const protocol::Command cmd = parseText("{\"cmd\":\"arm\",\"grip\":false}");
-  ASSERT_TYPE(protocol::CommandType::Arm, cmd);
-  TEST_ASSERT_EQUAL_UINT8(0, cmd.joint_count);
-  TEST_ASSERT_TRUE(cmd.has_grip);
-  TEST_ASSERT_FALSE(cmd.grip_closed);
-}
-
-void test_arm_rejects_empty_joint_array(void) {
-  const protocol::Command cmd = parseText("{\"cmd\":\"arm\",\"joints\":[]}");
-  ASSERT_TYPE(protocol::CommandType::Malformed, cmd);
-  ASSERT_ERROR(protocol::ParseError::BadJointCount, cmd);
-}
-
-void test_arm_rejects_too_many_joints(void) {
-  const protocol::Command cmd = parseText("{\"cmd\":\"arm\",\"joints\":[1,2,3,4,5]}");
-  ASSERT_TYPE(protocol::CommandType::Malformed, cmd);
-  ASSERT_ERROR(protocol::ParseError::BadJointCount, cmd);
-}
-
-void test_arm_rejects_non_array_joints(void) {
-  const protocol::Command cmd = parseText("{\"cmd\":\"arm\",\"joints\":45}");
-  ASSERT_TYPE(protocol::CommandType::Malformed, cmd);
-  ASSERT_ERROR(protocol::ParseError::BadField, cmd);
-}
-
-void test_arm_bad_angle_applies_nothing(void) {
-  // The no-partial-application rule (protocol.md 2.4). A wrong-typed angle halfway
-  // along must not leave the shoulder commanded and the elbow not — that is how an
-  // arm folds into the chassis.
-  const protocol::Command cmd = parseText("{\"cmd\":\"arm\",\"joints\":[10,\"x\",30]}");
-  ASSERT_TYPE(protocol::CommandType::Malformed, cmd);
-  ASSERT_ERROR(protocol::ParseError::BadField, cmd);
-  TEST_ASSERT_EQUAL_UINT8(0, cmd.joint_count);
-  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.0f, cmd.joints[0]);
-}
-
-void test_arm_rejects_non_bool_grip(void) {
-  ASSERT_TYPE(protocol::CommandType::Malformed, parseText("{\"cmd\":\"arm\",\"grip\":1}"));
-  ASSERT_TYPE(protocol::CommandType::Malformed,
-              parseText("{\"cmd\":\"arm\",\"grip\":\"true\"}"));
+  ASSERT_TYPE(protocol::CommandType::Unknown, cmd);
+  ASSERT_ERROR(protocol::ParseError::None, cmd);
+  TEST_ASSERT_FALSE(protocol::refreshesFailsafe(cmd.type));
 }
 
 // ---------------------------------------------------------------------------------
@@ -325,7 +282,6 @@ void test_refreshes_failsafe_membership(void) {
   TEST_ASSERT_TRUE(protocol::refreshesFailsafe(protocol::CommandType::Drive));
   TEST_ASSERT_TRUE(protocol::refreshesFailsafe(protocol::CommandType::Stop));
   TEST_ASSERT_TRUE(protocol::refreshesFailsafe(protocol::CommandType::Mast));
-  TEST_ASSERT_TRUE(protocol::refreshesFailsafe(protocol::CommandType::Arm));
 
   TEST_ASSERT_FALSE(protocol::refreshesFailsafe(protocol::CommandType::Hello));
   TEST_ASSERT_FALSE(protocol::refreshesFailsafe(protocol::CommandType::Ping));
@@ -342,6 +298,7 @@ void test_telemetry_is_tagged(void) {
   telemetry.battery_v = 12.5f;
   telemetry.mode = protocol::Mode::Safe;
   telemetry.rssi = -58;
+  telemetry.reader = protocol::ReaderState::Ready;
 
   char out[protocol::kMaxFrameBytes];
   const size_t length = protocol::serializeTelemetry(telemetry, out, sizeof(out));
@@ -352,6 +309,71 @@ void test_telemetry_is_tagged(void) {
   TEST_ASSERT_NOT_NULL(strstr(out, "\"mode\":\"safe\""));
   TEST_ASSERT_NOT_NULL(strstr(out, "\"rssi\":-58"));
   TEST_ASSERT_NOT_NULL(strstr(out, "\"battery_v\":12.5"));
+  TEST_ASSERT_NOT_NULL(strstr(out, "\"rfid\":\"ready\""));
+}
+
+void test_reader_state_names(void) {
+  // Scene 1 gates the mission on the reader reporting green, so "not fitted" and
+  // "fitted but broken" must never collapse into one value.
+  TEST_ASSERT_EQUAL_STRING("absent", protocol::readerStateName(protocol::ReaderState::Absent));
+  TEST_ASSERT_EQUAL_STRING("ready", protocol::readerStateName(protocol::ReaderState::Ready));
+  TEST_ASSERT_EQUAL_STRING("scanning",
+                           protocol::readerStateName(protocol::ReaderState::Scanning));
+  TEST_ASSERT_EQUAL_STRING("fault", protocol::readerStateName(protocol::ReaderState::Fault));
+}
+
+// ---------------------------------------------------------------------------------
+// tag reads — the payload of the revised mission
+// ---------------------------------------------------------------------------------
+
+void test_tag_read_frame(void) {
+  protocol::TagRead read;
+  read.id = "E280116060000208A1B2C3D4";
+  read.rssi = -47;
+  read.ts_ms = 184320;
+
+  char out[protocol::kMaxFrameBytes];
+  const size_t length = protocol::serializeTagRead(read, out, sizeof(out));
+
+  TEST_ASSERT_GREATER_THAN_UINT32(0, length);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"t\":\"tag\",\"id\":\"E280116060000208A1B2C3D4\",\"rssi\":-47,\"ts\":184320}", out);
+}
+
+void test_tag_read_rejects_empty_id(void) {
+  // A read the console cannot attribute to a rock is worse than a dropped one.
+  protocol::TagRead read;
+  read.id = "";
+  read.rssi = -47;
+
+  char out[protocol::kMaxFrameBytes];
+  TEST_ASSERT_EQUAL_UINT32(0, protocol::serializeTagRead(read, out, sizeof(out)));
+}
+
+void test_tag_read_rejects_null_id(void) {
+  protocol::TagRead read;
+  read.id = nullptr;
+
+  char out[protocol::kMaxFrameBytes];
+  TEST_ASSERT_EQUAL_UINT32(0, protocol::serializeTagRead(read, out, sizeof(out)));
+}
+
+void test_tag_read_rejects_oversize_id(void) {
+  std::string huge(protocol::kMaxTagIdChars + 1, 'A');
+  protocol::TagRead read;
+  read.id = huge.c_str();
+
+  char out[protocol::kMaxFrameBytes];
+  TEST_ASSERT_EQUAL_UINT32(0, protocol::serializeTagRead(read, out, sizeof(out)));
+}
+
+void test_tag_read_accepts_id_at_the_limit(void) {
+  std::string limit(protocol::kMaxTagIdChars, 'A');
+  protocol::TagRead read;
+  read.id = limit.c_str();
+
+  char out[protocol::kMaxFrameBytes];
+  TEST_ASSERT_GREATER_THAN_UINT32(0, protocol::serializeTagRead(read, out, sizeof(out)));
 }
 
 void test_telemetry_mode_names(void) {
@@ -433,18 +455,18 @@ int main(int, char **) {
   RUN_TEST(test_mast_single_axis_holds_the_other);
   RUN_TEST(test_mast_rejects_wrong_type);
 
-  RUN_TEST(test_arm_valid);
-  RUN_TEST(test_arm_grip_only);
-  RUN_TEST(test_arm_rejects_empty_joint_array);
-  RUN_TEST(test_arm_rejects_too_many_joints);
-  RUN_TEST(test_arm_rejects_non_array_joints);
-  RUN_TEST(test_arm_bad_angle_applies_nothing);
-  RUN_TEST(test_arm_rejects_non_bool_grip);
+  RUN_TEST(test_arm_is_now_an_unknown_verb);
 
   RUN_TEST(test_refreshes_failsafe_membership);
 
   RUN_TEST(test_telemetry_is_tagged);
   RUN_TEST(test_telemetry_mode_names);
+  RUN_TEST(test_reader_state_names);
+  RUN_TEST(test_tag_read_frame);
+  RUN_TEST(test_tag_read_rejects_empty_id);
+  RUN_TEST(test_tag_read_rejects_null_id);
+  RUN_TEST(test_tag_read_rejects_oversize_id);
+  RUN_TEST(test_tag_read_accepts_id_at_the_limit);
   RUN_TEST(test_hello_reply);
   RUN_TEST(test_pong_echoes_timestamp_exactly);
   RUN_TEST(test_round_trip_ping_to_pong);

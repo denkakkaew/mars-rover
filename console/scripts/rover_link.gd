@@ -15,6 +15,11 @@ signal handshake_completed(rover_version: int, firmware: String, caps: Array)
 signal telemetry_stale_changed(stale: bool)
 signal rtt_updated(rtt_ms: int, p95_ms: int)
 
+## One RFID tag read (docs/protocol.md 4.4). `rssi` is the reader's signal strength for
+## this read — the proximity cue for Scene 5 — and is a different radio from the Wi-Fi
+## RSSI in telemetry. The signal meter and analysis panel consume this in step S.11.
+signal tag_read(tag_id: String, rssi: int, rover_ts_ms: int)
+
 enum State {
 	DISCONNECTED,  ## No socket.
 	CONNECTING,    ## Socket opening, or the handshake sent and still unanswered.
@@ -185,11 +190,6 @@ func send_mast(pan_deg: float, tilt_deg: float) -> void:
 	_send({"cmd": "mast", "pan": pan_deg, "tilt": tilt_deg})
 
 
-## Arm joints + gripper. `joints` is one angle per servo, base outward.
-func send_arm(joints: Array, gripper_closed: bool) -> void:
-	_send({"cmd": "arm", "joints": joints, "grip": gripper_closed})
-
-
 func _send_drive() -> void:
 	_send({
 		"cmd": "drive",
@@ -269,8 +269,20 @@ func _handle_packet(text: String) -> void:
 			_handle_hello(frame)
 		"pong":
 			_handle_pong(frame)
+		"tag":
+			_handle_tag(frame)
 		_:
 			push_warning("Rover link: unrecognised frame type: %s" % text)
+
+
+func _handle_tag(frame: Dictionary) -> void:
+	var tag_id := str(frame.get("id", "")).to_upper()
+	if tag_id.is_empty():
+		# A read the console cannot attribute to a rock is worse than a dropped one —
+		# it would put an entry in the session log that means nothing.
+		push_warning("Rover link: tag frame with no id, dropped")
+		return
+	tag_read.emit(tag_id, int(frame.get("rssi", -100)), int(frame.get("ts", 0)))
 
 
 func _handle_hello(frame: Dictionary) -> void:

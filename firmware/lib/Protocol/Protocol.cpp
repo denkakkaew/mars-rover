@@ -70,40 +70,6 @@ Command parseMast(JsonObjectConst doc) {
   return out;
 }
 
-Command parseArm(JsonObjectConst doc) {
-  Command out;
-  out.type = CommandType::Arm;
-  out.error = ParseError::None;
-
-  JsonVariantConst joints = doc["joints"];
-  if (!joints.isNull()) {
-    if (!joints.is<JsonArrayConst>()) return rejected(ParseError::BadField);
-
-    JsonArrayConst list = joints.as<JsonArrayConst>();
-    const size_t count = list.size();
-    if (count == 0 || count > kMaxArmJoints) return rejected(ParseError::BadJointCount);
-
-    // Decoded into a scratch array first: a wrong-typed angle halfway along must not
-    // leave the first half applied (protocol.md 2.4, 3.5).
-    float decoded[kMaxArmJoints] = {};
-    size_t index = 0;
-    for (JsonVariantConst angle : list) {
-      if (!readNumber(angle, decoded[index])) return rejected(ParseError::BadField);
-      ++index;
-    }
-    for (size_t i = 0; i < count; ++i) out.joints[i] = decoded[i];
-    out.joint_count = static_cast<uint8_t>(count);
-  }
-
-  JsonVariantConst grip = doc["grip"];
-  if (!grip.isNull()) {
-    if (!grip.is<bool>()) return rejected(ParseError::BadField);
-    out.has_grip = true;
-    out.grip_closed = grip.as<bool>();
-  }
-  return out;
-}
-
 /// Writes `doc` only if the whole frame fits.
 ///
 /// `serializeJson` into a fixed buffer truncates and reports what it managed to write,
@@ -139,7 +105,6 @@ Command parse(const char *frame, size_t length) {
 
   if (strcmp(verb, "drive") == 0) return parseDrive(root);
   if (strcmp(verb, "mast") == 0) return parseMast(root);
-  if (strcmp(verb, "arm") == 0) return parseArm(root);
 
   if (strcmp(verb, "stop") == 0) {
     Command out;
@@ -179,7 +144,6 @@ bool refreshesFailsafe(CommandType type) {
     case CommandType::Drive:
     case CommandType::Stop:
     case CommandType::Mast:
-    case CommandType::Arm:
       return true;
     default:
       return false;
@@ -194,10 +158,19 @@ const char *name(CommandType type) {
     case CommandType::Drive: return "drive";
     case CommandType::Stop: return "stop";
     case CommandType::Mast: return "mast";
-    case CommandType::Arm: return "arm";
     case CommandType::Ping: return "ping";
   }
   return "unknown";
+}
+
+const char *readerStateName(ReaderState state) {
+  switch (state) {
+    case ReaderState::Ready: return "ready";
+    case ReaderState::Scanning: return "scanning";
+    case ReaderState::Fault: return "fault";
+    case ReaderState::Absent: break;
+  }
+  return "absent";
 }
 
 const char *modeName(Mode mode) {
@@ -215,6 +188,7 @@ size_t serializeTelemetry(const Telemetry &telemetry, char *out, size_t capacity
   doc["battery_v"] = telemetry.battery_v;
   doc["mode"] = modeName(telemetry.mode);
   doc["rssi"] = telemetry.rssi;
+  doc["rfid"] = readerStateName(telemetry.reader);
   return emit(doc, out, capacity);
 }
 
@@ -233,6 +207,21 @@ size_t serializePong(int64_t ts, char *out, size_t capacity) {
   JsonDocument doc;
   doc["t"] = "pong";
   doc["ts"] = ts;
+  return emit(doc, out, capacity);
+}
+
+size_t serializeTagRead(const TagRead &read, char *out, size_t capacity) {
+  // A read with no usable ID is worse than a dropped one: the console would log a
+  // detection it cannot attribute to any rock (protocol.md 4.4).
+  if (read.id == nullptr) return 0;
+  const size_t length = strnlen(read.id, kMaxTagIdChars + 1);
+  if (length == 0 || length > kMaxTagIdChars) return 0;
+
+  JsonDocument doc;
+  doc["t"] = "tag";
+  doc["id"] = read.id;
+  doc["rssi"] = read.rssi;
+  doc["ts"] = read.ts_ms;
   return emit(doc, out, capacity);
 }
 

@@ -40,9 +40,9 @@ uint32_t g_connected_at_ms = 0;
 bool g_hello_received = false;
 bool g_handshake_expired = false;
 
-// Subsystems this build actually actuates (docs/protocol.md 4.1). "mast" and "arm"
-// join the list when Phases 3 and 2 wire the servos up; until then the console greys
-// those controls out rather than sending commands into a void.
+// Subsystems this build actually has (docs/protocol.md 4.1). "rfid" joins the list when
+// Phase 2 fits the reader and "mast" when Phase 3 fits the servos; until then the console
+// greys those out rather than sending commands into a void.
 const char *const kCapabilities[] = {"drive"};
 
 // One shared outbound buffer. Every frame is built and sent within a single call, and
@@ -144,8 +144,7 @@ void handleCommand(uint8_t client, const protocol::Command &cmd, uint32_t now) {
       break;
 
     case protocol::CommandType::Mast:
-    case protocol::CommandType::Arm:
-      // Accepted shapes, not yet actuated: mast lands in Phase 3, arm in Phase 2.
+      // Accepted shape, not yet actuated — the pan/tilt servos land in Phase 3.
       log_w("%s command accepted but not actuated yet", protocol::name(cmd.type));
       break;
 
@@ -189,6 +188,11 @@ void publishTelemetry() {
   telemetry.battery_v = readBatteryVolts();
   telemetry.mode = reportedMode(g_state);
   telemetry.rssi = WiFi.RSSI();  // Phase 1 checkpoint: signal through the glass (risk R6)
+
+  // No reader hardware exists yet. Reporting `absent` rather than `fault` is the honest
+  // answer and keeps the two distinguishable once one is fitted at step 2.5; the real
+  // state comes from lib/Rfid at step 2.6.
+  telemetry.reader = protocol::ReaderState::Absent;
 
   const size_t length = protocol::serializeTelemetry(telemetry, g_out, sizeof(g_out));
   if (length == 0) {

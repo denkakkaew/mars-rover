@@ -42,7 +42,10 @@ from websockets.exceptions import ConnectionClosed
 PROTOCOL_VERSION = 1
 FIRMWARE_VERSION = "sim-0.1.0"
 MAX_FRAME_BYTES = 512
-MAX_ARM_JOINTS = 4
+MAX_TAG_ID_CHARS = 64
+# At most one tag frame per tag per this interval (protocol.md 4.4). A UHF reader can
+# report the same tag dozens of times a second and this is the *control* channel.
+TAG_RATE_LIMIT_S = 0.100
 COMMAND_TIMEOUT_S = 0.500
 TELEMETRY_INTERVAL_S = 0.500
 # A console that never identifies itself is treated as an unknown version
@@ -50,8 +53,9 @@ TELEMETRY_INTERVAL_S = 0.500
 HANDSHAKE_DEADLINE_S = 2.0
 
 # Commands that count as proof of a live console (protocol.md 6.2). Note the absentees:
-# ping and hello do not keep the motors alive.
-REFRESHING = {"drive", "stop", "mast", "arm"}
+# ping and hello do not keep the motors alive. `arm` was retired with the manipulator in
+# proposal Revision 2 and is now simply an unknown verb.
+REFRESHING = {"drive", "stop", "mast"}
 
 # ---------------------------------------------------------------------------------
 # Physical model of the rover and the arena
@@ -95,8 +99,6 @@ class Command:
     right: float = 0.0
     pan: float | None = None
     tilt: float | None = None
-    joints: list[float] | None = None
-    grip: bool | None = None
     ts: int = 0
 
 
@@ -161,25 +163,8 @@ def parse(raw: str | bytes) -> Command:
             setattr(out, field_name, float(value))
         return out
 
-    if verb == "arm":
-        out = Command(kind="arm")
-        joints = doc.get("joints")
-        if joints is not None:
-            if not isinstance(joints, list):
-                return _bad("bad_field")
-            if not 1 <= len(joints) <= MAX_ARM_JOINTS:
-                return _bad("bad_joint_count")
-            if not all(is_number(angle) for angle in joints):
-                return _bad("bad_field")
-            out.joints = [float(angle) for angle in joints]
-        grip = doc.get("grip")
-        if grip is not None:
-            if not isinstance(grip, bool):
-                return _bad("bad_field")
-            out.grip = grip
-        return out
-
-    # Unknown verbs are dropped, not fatal (protocol.md 2.2).
+    # Unknown verbs are dropped, not fatal (protocol.md 2.2) — which is exactly what
+    # lets `arm` disappear in Revision 2 without a protocol version bump.
     return Command(kind="unknown")
 
 
@@ -244,8 +229,6 @@ class Rover:
     left: float = 0.0
     right: float = 0.0
     battery_v: float = BATTERY_FULL_V
-    joints: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
-    grip: bool = False
     pan: float = 0.0
     tilt: float = 0.0
     bumped: bool = False
@@ -314,6 +297,12 @@ class Simulator:
         self.version = args.protocol_version
         self.telemetry_on = True
         self.quiet = args.quiet
+        # "absent" unless this build claims a reader. Tagged rocks and real
+        # distance-dependent reads arrive in step S.10; for now a tag frame can be
+        # injected by hand with the `tag` runtime switch, which is enough to exercise
+        # the console's dispatch path.
+        self.reader_state = "ready" if "rfid" in self.caps else "absent"
+        self._last_tag_sent: dict[str, float] = {}
         self.state = "safe"
         self.frames_in = 0
         self.frames_dropped = 0
@@ -345,6 +334,25 @@ class Simulator:
     def broadcast(self, payload: dict) -> None:
         for ws in list(self.clients):
             self.send(ws, payload)
+
+    def emit_tag(self, tag_id: str, rssi: int) -> bool:
+        """Reports one tag read, subject to the per-tag rate limit (protocol.md 4.4)."""
+        if not tag_id or len(tag_id) > MAX_TAG_ID_CHARS:
+            self.log(f"refusing to emit tag with unusable id {tag_id!r}")
+            return False
+
+        now = time.monotonic()
+        if now - self._last_tag_sent.get(tag_id, 0.0) < TAG_RATE_LIMIT_S:
+            return False
+        self._last_tag_sent[tag_id] = now
+
+        self.broadcast({
+            "t": "tag",
+            "id": tag_id.upper(),
+            "rssi": int(rssi),
+            "ts": int(now * 1000) & 0xFFFFFFFF,
+        })
+        return True
 
     # -- command handling ----------------------------------------------------------
 
@@ -429,12 +437,6 @@ class Simulator:
                     self.rover.pan = cmd.pan
                 if cmd.tilt is not None:
                     self.rover.tilt = cmd.tilt
-        elif cmd.kind == "arm":
-            if self.state == "drive":
-                if cmd.joints is not None:
-                    self.rover.joints = cmd.joints
-                if cmd.grip is not None:
-                    self.rover.grip = cmd.grip
 
     async def _expire_handshake(self, ws) -> None:
         """A console that never says hello is treated as an unknown version."""
@@ -491,12 +493,10 @@ class Simulator:
                 "battery_v": round(self.rover.battery_v, 2),
                 "mode": self.state,
                 "rssi": self.rover.rssi(),
+                "rfid": self.reader_state,
             }
             # Reserved names (protocol.md 4.2), additive and only sent for subsystems
-            # this build claims to actuate.
-            if "arm" in self.caps:
-                frame["arm"] = [round(a, 1) for a in self.rover.joints]
-                frame["grip"] = self.rover.grip
+            # this build claims to have.
             if "mast" in self.caps:
                 frame["pan"] = round(self.rover.pan, 1)
                 frame["tilt"] = round(self.rover.tilt, 1)
@@ -564,6 +564,8 @@ runtime switches:
   drop         hard-disconnect every console right now
   tlm on|off   stop sending telemetry while leaving the link up (stale-frame case)
   ver <n>      change the protocol version advertised, to force a mismatch
+  tag <id> [rssi]   inject one RFID tag read (S.10 makes these happen by driving)
+  reader <absent|ready|scanning|fault>   force the reported reader state
   batt <volts> force the pack voltage, for testing the low-battery display
   reset        recentre the rover and refill the pack
   quit         stop the simulator
@@ -594,6 +596,17 @@ def stdin_reader(sim: Simulator, loop: asyncio.AbstractEventLoop) -> None:
             elif verb == "ver" and rest:
                 sim.version = int(rest[0])
                 sim.log(f"advertising protocol v{sim.version} — reconnect to apply")
+            elif verb == "tag" and rest:
+                rssi = int(rest[1]) if len(rest) > 1 else -55
+                sent = loop.call_soon_threadsafe(sim.emit_tag, rest[0], rssi)
+                sim.log(f"injected tag read {rest[0].upper()} at {rssi} dBm")
+            elif verb == "reader" and rest:
+                state = rest[0].lower()
+                if state not in ("absent", "ready", "scanning", "fault"):
+                    sim.log(f"unknown reader state {state!r}")
+                else:
+                    sim.reader_state = state
+                    sim.log(f"reader state now {state}")
             elif verb == "batt" and rest:
                 sim.rover.battery_v = float(rest[0])
                 sim.log(f"battery forced to {sim.rover.battery_v} V")
