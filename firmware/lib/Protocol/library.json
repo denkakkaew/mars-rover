@@ -1,0 +1,10 @@
+{
+  "name": "Protocol",
+  "version": "1.0.0",
+  "description": "Console<->rover control-channel wire format. Host-compilable: no Arduino headers. See docs/protocol.md.",
+  "dependencies": {
+    "bblanchon/ArduinoJson": "^7.2.0"
+  },
+  "frameworks": "*",
+  "platforms": "*"
+}

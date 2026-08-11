@@ -434,11 +434,13 @@ hardware — the ✅ rows mean "written and matches this document", not "proven"
 | `stop` | ✅ | ❌ | Firmware handles it; `rover_link.gd` has no sender — see F2 below |
 | `mast` | ⚠️ accepted, logged, ignored | ✅ sender exists | Actuated in step 3.4 |
 | `arm` | ⚠️ accepted, logged, ignored | ✅ sender exists | Actuated in step 2.3 |
-| `hello` (both directions) | ❌ | ❌ | Specified here; implemented in S.3 (firmware) and S.6 (console) |
-| `ping` / `pong` | ❌ | ❌ | Specified here; implemented in step **S.7** |
-| `tlm` | ⚠️ **untagged** | ⚠️ **untagged** | Fields match, but neither side sends or checks `t` — see F1 below |
-| Failsafe timeout + disconnect (§6.2) | ✅ | — | 500 ms; extracted and unit-tested in S.3/S.4 |
-| Re-arm rule (§6.3) | ✅ | — | `g_failsafe_tripped` requires a fresh command |
+| `hello` (both directions) | ✅ | ❌ | Rover parses it, replies with `caps`, and refuses to arm on a version mismatch. Console sender lands in S.6. |
+| No-`hello` deadline (§5) | ⚠️ **not armed** | — | The 2000 ms fail-closed rule is deliberately not enforced yet: today's console never sends `hello`, so arming it now would lock out the only console that exists. Turned on in S.6, together with the console sender. |
+| `ping` / `pong` | ✅ | ❌ | Rover echoes `ts` unmodified. Console side is step **S.7**. |
+| `tlm` | ✅ tagged `"t":"tlm"` | ⚠️ **ignores `t`** | Firmware half of F1 closed in S.3; console still treats any dictionary as telemetry |
+| Failsafe timeout + disconnect (§6.2) | ✅ `lib/Safety` | — | 500 ms; extracted to a pure function in S.3, unit-tested in S.4 |
+| Re-arm rule (§6.3) | ✅ `lib/Safety` | — | Scoped to the connection, so a reconnect inside the timeout window cannot arm |
+| Strict parsing (§2.5, §1) | ✅ `lib/Protocol` | — | Wrong types and oversize frames rejected whole; F4 closed in S.3 |
 | Command repeat (§6.5) | — | ❌ | **See F3 — this is a live defect** |
 
 ### Findings raised by writing this document
@@ -454,12 +456,12 @@ hardware the rover would crawl for half a second and stop, with the operator's f
 down. §6.5 is the fix; it needs a repeat timer console-side. Naturally belongs with the S.6
 link-state work, or can be fixed on its own now.
 
-**F1 — rover → console frames have no discriminator.**
-[main.cpp:81-90](../firmware/src/main.cpp#L81-L90) sends bare `{battery_v, mode, rssi}`, and
-[rover_link.gd:81-87](../console/scripts/rover_link.gd#L81-L87) forwards *any* parsed
-dictionary as telemetry. That works only while telemetry is the sole rover→console message.
-The moment S.7 adds `pong`, the console would hand a `pong` to the telemetry strip. §2.1
-requires `"t":"tlm"`; both sides need the one-line change, in S.3 and S.6/S.7.
+**F1 — rover → console frames have no discriminator.** *(Firmware half closed in S.3.)*
+The firmware now tags every frame — `"t":"tlm"`, `"t":"hello"`, `"t":"pong"` — but
+[rover_link.gd:81-87](../console/scripts/rover_link.gd#L81-L87) still forwards *any* parsed
+dictionary to the telemetry strip without looking at `t`. Harmless while the console sends no
+`hello` and no `ping`, since telemetry is then the only frame it can receive; it becomes a
+real bug the moment S.7 adds pings. Console-side dispatch on `t` is S.6 work.
 
 **F2 — no console-side `stop` sender.** The firmware accepts `stop`; `rover_link.gd` has
 `send_drive`, `send_mast`, and `send_arm` but no `send_stop`. The drive pad's STOP button sends
@@ -467,19 +469,17 @@ requires `"t":"tlm"`; both sides need the one-line change, in S.3 and S.6/S.7.
 distinction is not available to the console. A three-line addition, best made when S.6 gives
 it a caller.
 
-**F4 — parsing is more permissive than §2.5 and §1 require.** `doc["l"] | 0.0f` in
-[main.cpp:41](../firmware/src/main.cpp#L41) leans on ArduinoJson's implicit conversion, so
-`{"l":"0.6"}` is coerced to `0.6` rather than dropped as malformed, and there is no 512-byte
-frame-size check. The failsafe half is already correct — malformed JSON and unknown commands
-both return without refreshing the timer. Strict parsing is the whole point of the `Protocol`
-module in **S.3**, and S.4's test list already names "wrong types" and "oversize payload", so
-this closes on schedule; it is recorded here only so the document is not read as describing
-current behaviour.
+**F4 — parsing was more permissive than §2.5 and §1 require.** *(Closed in S.3.)* The old
+`doc["l"] | 0.0f` leaned on ArduinoJson's implicit conversion, so `{"l":"0.6"}` was coerced to
+`0.6` rather than dropped, and there was no frame-size check. `protocol::parse` now rejects
+both, along with wrong-typed angles, non-boolean `grip`, and a `joints` array that is empty or
+over-long — and decodes joints into a scratch array first, so a bad angle halfway along cannot
+leave the earlier joints applied. S.4 adds the tests.
 
-None of the four is a shape mismatch: **every field of every message both sides actually
-implement matches this document exactly**, which is what step S.2's verification asked for.
-F1–F4 are gaps between the contract and current behaviour, and each has a step that closes
-it.
+**Status:** F4 is closed; F1 is closed firmware-side; F2 and F3 are open and both live in the
+console. None of the four was ever a shape mismatch — **every field of every message both
+sides implement matches this document exactly**, which is what step S.2's verification asked
+for.
 
 ---
 

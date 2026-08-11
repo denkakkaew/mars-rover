@@ -29,7 +29,12 @@ constexpr float ADC_REFERENCE_V = 3.3f;
 constexpr int ADC_MAX_COUNTS = 4095;
 
 // ---- Control link ----
+// Wire format and failsafe contract: docs/protocol.md.
 constexpr uint16_t CONTROL_WS_PORT = 81;
+
+// Reported to the console in the `hello` reply, so a mission log can record which
+// build produced a run (docs/protocol.md 4.1).
+constexpr char FIRMWARE_VERSION[] = "0.1.0";
 
 // Failsafe: if no drive command arrives within this window, the motors are cut.
 // A dropped Wi-Fi link must never leave the rover driving into the glass wall (risk R1).
