@@ -11,8 +11,14 @@ against real motors, servos, or cameras — pin assignments in
 Phase 1. The repository is under git on branch `main`, with `origin` pointing at
 `https://github.com/denkakkaew/mars-rover`.
 
-Phase S of the implementation plan is in progress: S.1–S.4 are done, so the control protocol
-is frozen in writing and the firmware's parsing and failsafe logic are covered by host tests.
+**The mission was revised on 2026-07-27 (Revision 2): the robotic arm is gone, replaced by a
+UHF RFID reader that identifies rocks in place, and the two cameras are reduced to one.** See
+"Documents and their authority" below — several files in this repo still describe the old
+Sample-Return mission.
+
+Phase S of the implementation plan is largely done: S.1–S.8 delivered the protocol contract,
+host-tested firmware modules, a desktop simulator, and a working console — all under
+Revision 1. Steps **S.9–S.11** bring that work onto the revised mission.
 
 - [plan/](plan/) — the proposal documents (see next section)
 - [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) — the ordered build plan, in small steps
@@ -91,54 +97,84 @@ bug. Keep them in step when the protocol changes.
 
 ## Documents and their authority
 
-The `plan/` directory holds several renderings of the same proposal at different stages of
-revision. Precedence when they disagree:
+The `plan/` directory holds several renderings of the proposal at different stages of
+revision, **and they are not all the same mission.** Precedence when they disagree:
 
-1. [plan/mars-rover](plan/mars-rover) — the original raw requirements from the customer
-   (9 numbered items). This is the source of truth for *what the system must do*. It is a
-   plain-text file with no extension.
-2. [plan/storyboard.md](plan/storyboard.md) — the current, most complete proposal
-   (executive summary, hardware/software spec, 8-scene mission storyboard, phased build plan,
-   risk register, glossary). **Edit this file** when the proposal changes.
-3. [plan/storyboard.html](plan/storyboard.html) — a standalone, styled presentation rendering
-   of an earlier draft of the storyboard (self-contained CSS with light/dark theming). It is
-   a separate artifact, not generated from the Markdown — changes to the Markdown do not
-   propagate here.
-4. `plan/*.docx` — exported/reviewer copies (`mar-rover.docx`, `storyboard.docx`,
-   `storyboard-exploration.docx`, `storyboard-exploration-th.docx` — the last is a Thai
-   translation). Treat these as downstream exports, not sources. `~$r-rover.docx` is a Word
-   lock file, not content.
+1. **[plan/storyboard-exploration.docx](plan/storyboard-exploration.docx) — Revision 2,
+   2026-07-27. This is the current proposal.** The mission is "seek → scan → identify":
+   no robotic arm, one mast camera, a front-mounted UHF RFID reader, and a simulated
+   elemental-composition readout on the console.
+   [plan/storyboard-exploration-th.docx](plan/storyboard-exploration-th.docx) is a faithful
+   Thai translation of the same revision, not a different document.
+2. [plan/mars-rover](plan/mars-rover) — the original raw requirements from the customer
+   (9 numbered items), plain text, no extension. Still the source of truth for the *frame* of
+   the project, but **Revision 2 deliberately departs from items 1, 6, 7 and 8** (arm, two
+   cameras, collect-and-carry, two monitors) after discussion with the client. Where the two
+   conflict on those points, Revision 2 wins.
+3. [plan/storyboard.md](plan/storyboard.md) — **Revision 1, superseded.** The Sample-Return
+   concept with the arm and two cameras. Historical, except that Revision 2 explicitly carries
+   its §2 project rationale forward unchanged. Do not implement from it.
+4. [plan/storyboard.html](plan/storyboard.html) and `plan/storyboard.docx` — renderings of
+   Revision 1 or earlier. Historical. `~$r-rover.docx` is a Word lock file, not content.
+
+**There is no Markdown source for Revision 2** — it exists only as .docx. That means the
+authoritative proposal cannot be diffed or edited in this repo the way Revision 1 could.
+Worth fixing when someone has the time; until then, extract the text to read it:
+
+```powershell
+python -c "import re,zipfile;x=zipfile.ZipFile('plan/storyboard-exploration.docx').read('word/document.xml').decode();x=x.replace('</w:p>','\n');print(re.sub('<[^>]+>','',x))"
+```
+
+[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) tracks Revision 2 and opens with a table of
+exactly what changed.
 
 The proposal is written for a non-technical employer/sponsor audience and is deliberately
 careful about tense: it describes what the system is *designed to* do, never claims working
 hardware, and explicitly omits costs and dates until Phase 0 is approved. Preserve that
 framing when editing — do not let the storyboard read as a report of a completed build.
 
-## Target architecture (from the proposal)
+## Target architecture (Revision 2)
 
-Three independent channels, and keeping them separate is the central architectural decision:
+Two independent channels, and keeping them separate is still the central architectural
+decision:
 
-- **Control channel** — Godot touchscreen console → ESP32 over Wi-Fi (WebSocket/UDP), with
+- **Control channel** — Godot touchscreen console → ESP32 over Wi-Fi (WebSocket), with
   Bluetooth as fallback. ESP32 drives 4 DC motors through a dual H-bridge (differential /
-  skid steering), plus arm servos (3–4 joints + gripper) and mast pan/tilt servos, and
-  publishes telemetry back.
-- **Video channel A** — front IP camera → its own monitor over Wi-Fi (driving, fine alignment).
-- **Video channel B** — mast IP camera on a pan/tilt head → its own monitor over Wi-Fi (survey).
+  skid steering) and the mast pan/tilt servos, polls the RFID reader over UART, and publishes
+  telemetry and tag reads back.
+- **Video channel** — the mast IP camera on its pan/tilt head → one monitor over Wi-Fi. It
+  serves as both the survey view and, aimed forward and down, the driving view.
 
-Video never shares the control channel, so streaming load cannot make driving laggy and either
-feed can drop without losing the ability to drive home. Any proposed change that merges these
-channels contradicts the design rationale in §5.4 and risk R1.
+Video never shares the control channel, so streaming load cannot make driving laggy. Any
+proposed change that merges them contradicts the design rationale in proposal §5.5 and risk R1.
+
+**There is no robotic arm.** The front mounting point carries the RFID antenna instead. Tag
+reads travel reader → ESP32 → console alongside telemetry; the **console**, not the rover,
+turns a tag ID into a displayed composition, so the lookup table can be edited without
+reflashing.
+
+**One camera is a single point of vision** (risk R8) — if the mast head fails, the rover is
+blind. That makes mast pan/tilt reliability higher priority than it was in Revision 1, and the
+head should default to a forward-and-down driving position between surveys.
 
 The arena is a sealed 1.4 m × 3.0 m glass box; the rover operates inside, the operator station
-outside. The 1.4 m width constrains chassis footprint and turning radius (risk R5).
+outside. The 1.4 m width constrains chassis footprint and turning radius (risk R5). Glass is
+largely transparent to both 2.4 GHz Wi-Fi and UHF RFID, but that is a checkpoint to verify for
+both bands, not an assumption (risk R6).
 
 ## Control protocol
 
 **[docs/protocol.md](docs/protocol.md) is the authoritative contract** — every message, field,
 unit, and range, plus the failsafe rules. It is frozen at v1. When code and that document
 disagree, the code is wrong; changing the protocol means editing the document first, bumping
-the version, and then changing both codebases. Its §8 tracks what is implemented versus
+the version, and then changing every implementation. Its §8 tracks what is implemented versus
 specified, and carries the open findings.
+
+⚠️ **The contract still describes Revision 1.** It defines an `arm` command that no longer
+exists and has no tag-read frame. Step **S.9** of the implementation plan revises it — drop
+`arm`, add the tag-read path and reader status, change `caps` from `drive, mast, arm` to
+`drive, mast, rfid`. Until S.9 lands, `arm` remains in the protocol, the firmware, the
+simulator and `rover_link.gd` as dead but harmless scaffolding. Don't build on it.
 
 In short: JSON text frames over a WebSocket, ESP32 as server on port 81, console as client.
 Console → rover carries a `cmd` discriminator, rover → console carries a `t`. `drive` and
