@@ -1,0 +1,11 @@
+This project is the education project about Mars rover robot. it a simulating the operation of the Mars rover robot.
+Requirements:
+ 1. create a hardware robot simulate the Mars rover, 4 wheels, 1 robotic arm to pick up the rock.
+ 2. the robot task is running from the start point to seek the interesting objects (rock) and collect them for research. 
+ 3. the simulate environment is the in the glass box 1.4m x 3m robot will install inside. The robot controller are out side the glass box. 
+ 4. the robot controller is a touch screen monitor with install the robot controller app. 
+ 5. the robot controller can control the robot movement, forward, backward, left, right.
+ 6. the robot install a 2 cameras one in the front of the robot another one at the top of the robot (on the pole). Camara can control left right up down from the controller.
+ 7. there is robot arm in the front of the robot that can control by the controller to collect the object (rock) from the target and carry the object to the base.
+ 8. there are 2 monitors to display the camara. The camera is the ip camera and each monitor connect to it via WIFI module
+ 9. the controller application program stack might use godot and control the robot via bluetooth/WIFI. the robot board might be esp32 with bluetooth/WIFI module.

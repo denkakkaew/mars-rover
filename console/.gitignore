@@ -1,0 +1,7 @@
+# Godot 4 — editor-generated, safe to regenerate
+.godot/
+/android/
+export_presets.cfg
+
+# Exported builds
+/build/

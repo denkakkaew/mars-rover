@@ -1,0 +1,105 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/console.gd" id="1_console"]
+[ext_resource type="Script" path="res://scripts/rover_link.gd" id="2_link"]
+
+[node name="Console" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_console")
+
+[node name="RoverLink" type="Node" parent="."]
+script = ExtResource("2_link")
+
+[node name="Margin" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 32
+theme_override_constants/margin_top = 32
+theme_override_constants/margin_right = 32
+theme_override_constants/margin_bottom = 32
+
+[node name="Layout" type="VBoxContainer" parent="Margin"]
+layout_mode = 2
+theme_override_constants/separation = 24
+
+[node name="Telemetry" type="PanelContainer" parent="Margin/Layout"]
+layout_mode = 2
+
+[node name="Strip" type="HBoxContainer" parent="Margin/Layout/Telemetry"]
+layout_mode = 2
+theme_override_constants/separation = 48
+
+[node name="LinkLabel" type="Label" parent="Margin/Layout/Telemetry/Strip"]
+layout_mode = 2
+text = "LINK DOWN"
+
+[node name="BatteryLabel" type="Label" parent="Margin/Layout/Telemetry/Strip"]
+layout_mode = 2
+text = "BATT --.-- V"
+
+[node name="ModeLabel" type="Label" parent="Margin/Layout/Telemetry/Strip"]
+layout_mode = 2
+text = "MODE ---"
+
+[node name="DrivePad" type="GridContainer" parent="Margin/Layout"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/h_separation = 16
+theme_override_constants/v_separation = 16
+columns = 3
+
+[node name="SpacerTopLeft" type="Control" parent="Margin/Layout/DrivePad"]
+layout_mode = 2
+
+[node name="Forward" type="Button" parent="Margin/Layout/DrivePad"]
+custom_minimum_size = Vector2(160, 120)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+text = "FORWARD"
+
+[node name="SpacerTopRight" type="Control" parent="Margin/Layout/DrivePad"]
+layout_mode = 2
+
+[node name="Left" type="Button" parent="Margin/Layout/DrivePad"]
+custom_minimum_size = Vector2(160, 120)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+text = "LEFT"
+
+[node name="Stop" type="Button" parent="Margin/Layout/DrivePad"]
+custom_minimum_size = Vector2(160, 120)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+text = "STOP"
+
+[node name="Right" type="Button" parent="Margin/Layout/DrivePad"]
+custom_minimum_size = Vector2(160, 120)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+text = "RIGHT"
+
+[node name="SpacerBottomLeft" type="Control" parent="Margin/Layout/DrivePad"]
+layout_mode = 2
+
+[node name="Back" type="Button" parent="Margin/Layout/DrivePad"]
+custom_minimum_size = Vector2(160, 120)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+text = "BACK"
+
+[node name="SpacerBottomRight" type="Control" parent="Margin/Layout/DrivePad"]
+layout_mode = 2

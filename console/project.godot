@@ -1,0 +1,27 @@
+; Engine configuration file.
+; Mars Rover — touchscreen operator console (Section 5.1 of plan/storyboard.md)
+
+config_version=5
+
+[application]
+
+config/name="Mars Rover Console"
+config/description="Touchscreen operator console for the Mars rover sample-return mission."
+run/main_scene="res://scenes/console.tscn"
+config/features=PackedStringArray("4.6", "GL Compatibility")
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=800
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[input_devices]
+
+pointing/emulate_touch_from_mouse=true
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"

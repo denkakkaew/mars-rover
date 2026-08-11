@@ -1,0 +1,608 @@
+<style>
+  :root{
+    --bg:#F3F1ED; --surface:#FBFAF7; --surface-2:#ECE8E1; --sink:#E4DFD6;
+    --ink:#1B1A17; --ink-2:#5A554D; --ink-3:#8B857A;
+    --line:#DBD5CB; --line-strong:#C7C0B4;
+    --rust:#B4451B; --rust-deep:#8C3211; --rust-soft:#F0DBCF;
+    --cyan:#0B7E92; --cyan-bright:#0E97AD; --cyan-soft:#D3ECF0;
+    --good:#2E7D46; --warn:#9A6714;
+    --shadow:0 1px 2px rgba(27,26,23,.06),0 8px 30px rgba(27,26,23,.07);
+    --mono:ui-monospace,"Cascadia Code","Cascadia Mono",Consolas,"SFMono-Regular",monospace;
+    --sans:-apple-system,"Segoe UI",system-ui,Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0D1017; --surface:#141A23; --surface-2:#1A212C; --sink:#10151C;
+      --ink:#ECEBE6; --ink-2:#98A2AF; --ink-3:#6B7684;
+      --line:#252E3A; --line-strong:#33404F;
+      --rust:#E4703D; --rust-deep:#B4451B; --rust-soft:#3A1F14;
+      --cyan:#39C6D6; --cyan-bright:#63DAE8; --cyan-soft:#0F2A31;
+      --good:#57C97E; --warn:#D9A63A;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 40px rgba(0,0,0,.45);
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#F3F1ED; --surface:#FBFAF7; --surface-2:#ECE8E1; --sink:#E4DFD6;
+    --ink:#1B1A17; --ink-2:#5A554D; --ink-3:#8B857A;
+    --line:#DBD5CB; --line-strong:#C7C0B4;
+    --rust:#B4451B; --rust-deep:#8C3211; --rust-soft:#F0DBCF;
+    --cyan:#0B7E92; --cyan-bright:#0E97AD; --cyan-soft:#D3ECF0;
+    --good:#2E7D46; --warn:#9A6714;
+    --shadow:0 1px 2px rgba(27,26,23,.06),0 8px 30px rgba(27,26,23,.07);
+  }
+  :root[data-theme="dark"]{
+    --bg:#0D1017; --surface:#141A23; --surface-2:#1A212C; --sink:#10151C;
+    --ink:#ECEBE6; --ink-2:#98A2AF; --ink-3:#6B7684;
+    --line:#252E3A; --line-strong:#33404F;
+    --rust:#E4703D; --rust-deep:#B4451B; --rust-soft:#3A1F14;
+    --cyan:#39C6D6; --cyan-bright:#63DAE8; --cyan-soft:#0F2A31;
+    --good:#57C97E; --warn:#D9A63A;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 40px rgba(0,0,0,.45);
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0}
+  .doc{
+    background:var(--bg); color:var(--ink);
+    font-family:var(--sans); line-height:1.6;
+    -webkit-font-smoothing:antialiased; overflow-x:hidden;
+  }
+  .wrap{max-width:1080px; margin:0 auto; padding:0 clamp(20px,5vw,48px)}
+  .mono{font-family:var(--mono)}
+  h1,h2,h3{text-wrap:balance; line-height:1.12; margin:0}
+  p{margin:0}
+  a{color:var(--cyan-bright)}
+
+  .eyebrow{
+    font-family:var(--mono); font-size:12px; letter-spacing:.22em;
+    text-transform:uppercase; color:var(--cyan); font-weight:600;
+  }
+
+  /* ---------- HERO ---------- */
+  .hero{position:relative; overflow:hidden; border-bottom:1px solid var(--line)}
+  .hero-grid{
+    position:absolute; inset:0; opacity:.5;
+    background-image:
+      linear-gradient(var(--line) 1px,transparent 1px),
+      linear-gradient(90deg,var(--line) 1px,transparent 1px);
+    background-size:44px 44px; mask-image:radial-gradient(120% 90% at 70% 0%,#000 15%,transparent 75%);
+    -webkit-mask-image:radial-gradient(120% 90% at 70% 0%,#000 15%,transparent 75%);
+  }
+  .hero-glow{
+    position:absolute; top:-30%; right:-10%; width:60%; height:120%;
+    background:radial-gradient(closest-side,var(--rust-soft),transparent 70%);
+    opacity:.7; pointer-events:none;
+  }
+  .hero-inner{position:relative; padding:clamp(48px,9vw,104px) 0 clamp(40px,6vw,72px)}
+  .badge{
+    display:inline-flex; align-items:center; gap:9px;
+    font-family:var(--mono); font-size:12.5px; letter-spacing:.12em; text-transform:uppercase;
+    color:var(--ink-2); border:1px solid var(--line-strong); border-radius:100px;
+    padding:6px 14px; background:var(--surface);
+  }
+  .dot{width:8px; height:8px; border-radius:50%; background:var(--good);
+    box-shadow:0 0 0 4px color-mix(in srgb,var(--good) 22%,transparent)}
+  h1.title{
+    font-size:clamp(44px,9.2vw,104px); font-weight:800; letter-spacing:-.03em;
+    margin:26px 0 0; line-height:.98;
+  }
+  h1.title .rust{color:var(--rust)}
+  .lede{
+    margin-top:22px; max-width:60ch; font-size:clamp(16.5px,2.1vw,20px);
+    color:var(--ink-2);
+  }
+  .hero-meta{
+    display:flex; flex-wrap:wrap; gap:10px 26px; margin-top:30px;
+    font-family:var(--mono); font-size:13px; color:var(--ink-3);
+  }
+  .hero-meta b{color:var(--ink); font-weight:600}
+
+  /* ---------- SECTIONS ---------- */
+  section{padding:clamp(52px,8vw,90px) 0}
+  .sec-head{display:flex; align-items:baseline; gap:16px; flex-wrap:wrap; margin-bottom:34px}
+  .sec-head h2{font-size:clamp(26px,4.2vw,40px); font-weight:800; letter-spacing:-.02em}
+  .sec-num{font-family:var(--mono); color:var(--rust); font-size:14px; font-weight:600}
+  .sec-sub{color:var(--ink-2); max-width:64ch; margin-top:10px}
+  .divide{border:none; border-top:1px solid var(--line)}
+
+  /* ---------- STAT STRIP ---------- */
+  .stats{display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:var(--line);
+    border:1px solid var(--line); border-radius:14px; overflow:hidden}
+  .stat{background:var(--surface); padding:20px 18px}
+  .stat .k{font-family:var(--mono); font-size:11.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-3)}
+  .stat .v{font-size:clamp(22px,3.4vw,32px); font-weight:800; letter-spacing:-.02em; margin-top:8px;
+    font-variant-numeric:tabular-nums}
+  .stat .v small{font-size:14px; font-weight:600; color:var(--ink-2)}
+  @media(max-width:720px){.stats{grid-template-columns:repeat(2,1fr)}}
+
+  /* ---------- CARDS ---------- */
+  .grid{display:grid; gap:18px}
+  .cols-2{grid-template-columns:1fr 1fr}
+  .cols-3{grid-template-columns:repeat(3,1fr)}
+  @media(max-width:820px){.cols-2,.cols-3{grid-template-columns:1fr}}
+  .card{
+    background:var(--surface); border:1px solid var(--line); border-radius:14px;
+    padding:22px; box-shadow:var(--shadow);
+  }
+  .card h3{font-size:17px; font-weight:700; letter-spacing:-.01em; display:flex; align-items:center; gap:10px}
+  .card .tag{font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--cyan); border:1px solid var(--line-strong); border-radius:6px; padding:2px 7px}
+  .card ul{margin:12px 0 0; padding-left:0; list-style:none}
+  .card li{position:relative; padding-left:18px; margin:8px 0; color:var(--ink-2); font-size:14.5px}
+  .card li::before{content:""; position:absolute; left:2px; top:9px; width:6px; height:6px;
+    border-radius:1px; background:var(--rust); transform:rotate(45deg)}
+  .card li b{color:var(--ink); font-weight:600}
+
+  /* schematic + architecture figures */
+  .figure{background:var(--surface); border:1px solid var(--line); border-radius:14px;
+    padding:20px; box-shadow:var(--shadow)}
+  .figure svg{display:block; width:100%; height:auto}
+  .figcap{font-family:var(--mono); font-size:12px; color:var(--ink-3); margin-top:12px; text-align:center}
+  .split{display:grid; grid-template-columns:1.05fr 1fr; gap:22px; align-items:start}
+  @media(max-width:860px){.split{grid-template-columns:1fr}}
+
+  /* ---------- STORYBOARD ---------- */
+  .scene{
+    display:grid; grid-template-columns:210px 1fr; gap:26px; align-items:stretch;
+    background:var(--surface); border:1px solid var(--line); border-radius:16px;
+    padding:20px; margin-bottom:18px; box-shadow:var(--shadow);
+    opacity:0; transform:translateY(18px); transition:opacity .6s ease,transform .6s ease;
+  }
+  .scene.in{opacity:1; transform:none}
+  .scene .map{background:var(--sink); border:1px solid var(--line); border-radius:12px; padding:8px}
+  .scene .map svg{display:block; width:100%; height:auto}
+  .scene .body{display:flex; flex-direction:column}
+  .scene .snum{font-family:var(--mono); font-size:12.5px; letter-spacing:.16em; color:var(--rust); font-weight:600}
+  .scene h3{font-size:clamp(20px,3vw,26px); font-weight:800; letter-spacing:-.02em; margin:6px 0 0}
+  .scene p{color:var(--ink-2); margin-top:10px; font-size:15px}
+  .chips{display:flex; flex-wrap:wrap; gap:8px; margin-top:auto; padding-top:16px}
+  .chip{font-family:var(--mono); font-size:11.5px; display:inline-flex; align-items:center; gap:7px;
+    background:var(--surface-2); border:1px solid var(--line); border-radius:8px; padding:5px 10px; color:var(--ink-2)}
+  .chip b{color:var(--ink); font-weight:600}
+  .chip.cy{border-color:color-mix(in srgb,var(--cyan) 40%,var(--line))}
+  .chip .ld{width:7px; height:7px; border-radius:50%; background:var(--cyan)}
+  .chip.rs .ld{background:var(--rust)}
+  @media(max-width:640px){.scene{grid-template-columns:1fr}.scene .map{max-width:230px; margin:0 auto}}
+
+  /* map svg classes */
+  .m-floor{fill:var(--surface-2)}
+  .m-wall{fill:none; stroke:var(--line-strong); stroke-width:2}
+  .m-grid{stroke:var(--line); stroke-width:.6}
+  .m-base{fill:color-mix(in srgb,var(--cyan) 12%,transparent); stroke:var(--cyan); stroke-width:1; stroke-dasharray:3 3}
+  .m-label{fill:var(--ink-3); font-family:var(--mono); font-size:9px; letter-spacing:.08em}
+  .m-rock{fill:var(--ink-3)}
+  .m-rock-t{fill:var(--rust)}
+  .m-ring{fill:none; stroke:var(--rust); stroke-width:1.6}
+  .m-path{fill:none; stroke:var(--cyan); stroke-width:1.6; stroke-dasharray:2 3; opacity:.75}
+  .m-rbody{fill:var(--sink); stroke:var(--rust); stroke-width:1.8}
+  .m-rbody.dim{stroke:var(--ink-3)}
+  .m-wheel{fill:var(--ink-2)}
+  .m-mast{fill:var(--cyan)}
+  .m-arm{stroke:var(--cyan); stroke-width:2; fill:none}
+  .m-scan{fill:var(--cyan); opacity:.14}
+  .m-tray{fill:none; stroke:var(--good); stroke-width:1.4}
+
+  /* ---------- CAPABILITIES / FOOTER ---------- */
+  .caps{display:grid; grid-template-columns:repeat(5,1fr); gap:14px}
+  @media(max-width:820px){.caps{grid-template-columns:repeat(2,1fr)}}
+  .cap{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:16px}
+  .cap .h{font-weight:700; font-size:14.5px}
+  .cap .d{color:var(--ink-2); font-size:13px; margin-top:6px}
+  footer{border-top:1px solid var(--line); padding:34px 0 60px; color:var(--ink-3);
+    font-family:var(--mono); font-size:12.5px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px}
+
+  @media (prefers-reduced-motion:reduce){
+    .scene{opacity:1; transform:none; transition:none}
+    *{animation:none!important}
+  }
+</style>
+
+<div class="doc">
+
+  <!-- ================= HERO ================= -->
+  <header class="hero">
+    <div class="hero-grid"></div>
+    <div class="hero-glow"></div>
+    <div class="wrap hero-inner">
+      <span class="badge"><span class="dot"></span> Mission Console · Link Established</span>
+      <h1 class="title">MARS&nbsp;ROVER<br><span class="rust">Sample&nbsp;Return</span></h1>
+      <p class="lede">An educational robotics build: a four-wheeled rover in a sealed
+        1.4&nbsp;m&nbsp;×&nbsp;3&nbsp;m glass terrarium, driven from a touchscreen console to
+        seek out rocks, collect them with a robotic arm, and carry them home to base.</p>
+      <div class="hero-meta">
+        <span>ARENA <b>1.4 m × 3.0 m</b></span>
+        <span>BRAIN <b>ESP32 · Wi-Fi + BT</b></span>
+        <span>VISION <b>2× IP Camera</b></span>
+        <span>CONSOLE <b>Godot / Touchscreen</b></span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ================= MISSION PARAMETERS ================= -->
+  <section class="wrap">
+    <div class="sec-head">
+      <span class="sec-num">01</span>
+      <div><h2>Mission Parameters</h2>
+        <p class="sec-sub">The whole mission at a glance — the arena it runs in and the machine that runs it.</p></div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="k">Drive</div><div class="v">4 <small>wheels</small></div></div>
+      <div class="stat"><div class="k">Manipulator</div><div class="v">1 <small>arm + gripper</small></div></div>
+      <div class="stat"><div class="k">Cameras</div><div class="v">2 <small>front + mast</small></div></div>
+      <div class="stat"><div class="k">Displays</div><div class="v">2 <small>monitors</small></div></div>
+      <div class="stat"><div class="k">Arena width</div><div class="v">1.4 <small>m</small></div></div>
+      <div class="stat"><div class="k">Arena length</div><div class="v">3.0 <small>m</small></div></div>
+      <div class="stat"><div class="k">Onboard brain</div><div class="v">ESP32</div></div>
+      <div class="stat"><div class="k">Mission goal</div><div class="v" style="font-size:19px">Seek · Collect · Return</div></div>
+    </div>
+  </section>
+
+  <hr class="divide">
+
+  <!-- ================= HARDWARE ================= -->
+  <section class="wrap">
+    <div class="sec-head">
+      <span class="sec-num">02</span>
+      <div><h2>Hardware Specification</h2>
+        <p class="sec-sub">A top-down look at the rover, and the components that make it drive, see, and grab.</p></div>
+    </div>
+
+    <div class="split">
+      <div class="figure">
+        <div id="rover-schematic"></div>
+        <div class="figcap">Fig. 2.1 — Rover platform, top view (forward = up)</div>
+      </div>
+      <div class="grid" style="gap:14px">
+        <div class="card">
+          <h3>Drive platform <span class="tag">Mechanics</span></h3>
+          <ul>
+            <li><b>4× DC geared motors</b> through a dual H-bridge driver (TB6612 / L298N).</li>
+            <li><b>Differential (skid) steering</b> — forward, backward, left, right.</li>
+            <li>Sized to turn freely inside the 1.4&nbsp;m box width.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Robotic arm <span class="tag">Manipulator</span></h3>
+          <ul>
+            <li><b>3–4 servo joints + gripper</b> (MG996R / SG90 class).</li>
+            <li>Front-mounted; reaches past the bumper to grip a rock on the surface.</li>
+            <li>Holds the sample secure through transit back to base.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Vision &amp; compute <span class="tag">Electronics</span></h3>
+          <ul>
+            <li><b>Front IP camera</b> for driving and close-in alignment.</li>
+            <li><b>Mast IP camera</b> on a pole with a <b>pan/tilt head</b> (2 servos) to look L/R/up/down.</li>
+            <li><b>ESP32</b> main board — Wi-Fi + Bluetooth, runs motor &amp; servo control.</li>
+            <li><b>LiPo pack</b> + buck regulator for 5V / 3.3V rails.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divide">
+
+  <!-- ================= SOFTWARE / ARCHITECTURE ================= -->
+  <section class="wrap">
+    <div class="sec-head">
+      <span class="sec-num">03</span>
+      <div><h2>Software &amp; Signal Flow</h2>
+        <p class="sec-sub">Control commands and camera video travel on separate paths, so driving stays
+          responsive while two live feeds stream to their own monitors.</p></div>
+    </div>
+    <div class="figure">
+      <div id="arch-diagram"></div>
+      <div class="figcap">Fig. 3.1 — System architecture: control channel (rust) vs. video channel (cyan)</div>
+    </div>
+    <div class="grid cols-3" style="margin-top:18px">
+      <div class="card">
+        <h3>Console app <span class="tag">Godot</span></h3>
+        <ul>
+          <li>Full-screen on the touchscreen.</li>
+          <li>Drive pad, mast pan/tilt, arm controls, telemetry strip.</li>
+          <li>Commands over <b>Wi-Fi (WebSocket)</b>, Bluetooth fallback.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Rover firmware <span class="tag">ESP32</span></h3>
+        <ul>
+          <li>Parses commands, drives H-bridge + servos.</li>
+          <li>Runs the arm and mast pan/tilt loops.</li>
+          <li>Reports telemetry back to the console.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Video path <span class="tag">Wi-Fi</span></h3>
+        <ul>
+          <li>Each IP camera streams to <b>its own monitor</b>.</li>
+          <li>Front feed on one screen, mast feed on the other.</li>
+          <li>Video stays off the control channel.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divide">
+
+  <!-- ================= STORYBOARD ================= -->
+  <section class="wrap">
+    <div class="sec-head">
+      <span class="sec-num">04</span>
+      <div><h2>The Storyboard</h2>
+        <p class="sec-sub">One mission run, told in eight scenes. Each map is a top-down view of the box —
+          base at the bottom, downrange toward the top. The rover's path traces from base to where it stands now.</p></div>
+    </div>
+    <div id="scenes"></div>
+  </section>
+
+  <hr class="divide">
+
+  <!-- ================= CAPABILITIES ================= -->
+  <section class="wrap">
+    <div class="sec-head">
+      <span class="sec-num">05</span>
+      <div><h2>What It Demonstrates</h2>
+        <p class="sec-sub">Every layer of a working robotics stack, integrated into one mission loop.</p></div>
+    </div>
+    <div class="caps">
+      <div class="cap"><div class="h">Mechatronics</div><div class="d">Multi-motor drive + a multi-DOF arm working in concert.</div></div>
+      <div class="cap"><div class="h">Embedded firmware</div><div class="d">Real-time control on ESP32 with wireless command handling.</div></div>
+      <div class="cap"><div class="h">Wireless systems</div><div class="d">Separating low-latency control from camera video.</div></div>
+      <div class="cap"><div class="h">Operator UI</div><div class="d">A purpose-built touchscreen console in Godot.</div></div>
+      <div class="cap"><div class="h">Systems integration</div><div class="d">Mechanics, electronics, firmware, networking, UI as one.</div></div>
+    </div>
+  </section>
+
+  <footer class="wrap">
+    <span>MARS ROVER · SAMPLE RETURN</span>
+    <span>PROJECT STORYBOARD · 2026-07-15</span>
+  </footer>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var SVGNS="http://www.w3.org/2000/svg";
+
+  /* ---------------- Scene map renderer ---------------- */
+  var S=86, Lm=3.0, Wm=1.4, PADL=34, PADT=26, PADR=34, PADB=26;
+  var VW=Math.round(PADL+Wm*S+PADR), VH=Math.round(PADT+Lm*S+PADB);
+  function tx(xm){return PADL+xm*S;}
+  function ty(ym){return PADT+(Lm-ym)*S;}
+
+  var ROCKS=[
+    {x:0.90,y:1.55,r:7,t:true},
+    {x:0.35,y:2.40,r:6},
+    {x:1.12,y:2.66,r:5},
+    {x:0.30,y:1.05,r:6},
+    {x:1.05,y:2.10,r:4}
+  ];
+
+  function rover(xm,ym,o){
+    o=o||{};
+    var cx=tx(xm), cy=ty(ym), bw=30, bl=42, t=cy-bl/2, l=cx-bw/2;
+    var dimc=o.dim?" dim":"";
+    var s="";
+    // wheels
+    var wy1=cy-bl/2+5, wy2=cy+bl/2-15;
+    [[l-4,wy1],[l+bw-4,wy1],[l-4,wy2],[l+bw-4,wy2]].forEach(function(p){
+      s+='<rect class="m-wheel" x="'+p[0]+'" y="'+p[1]+'" width="8" height="12" rx="2"/>';
+    });
+    // body
+    s+='<rect class="m-rbody'+dimc+'" x="'+l+'" y="'+t+'" width="'+bw+'" height="'+bl+'" rx="6"/>';
+    // mast camera (center dot)
+    s+='<circle class="m-mast" cx="'+cx+'" cy="'+cy+'" r="4"/>';
+    // arm
+    if(o.arm){
+      var ay=t-o.arm;
+      s+='<path class="m-arm" d="M'+cx+' '+t+' L'+cx+' '+ay+'"/>';
+      s+='<path class="m-arm" d="M'+(cx-4)+' '+(ay+2)+' L'+cx+' '+ay+' L'+(cx+4)+' '+(ay+2)+'"/>';
+      if(o.carry) s+='<circle class="m-rock-t" cx="'+cx+'" cy="'+(ay-1)+'" r="5"/>';
+    } else {
+      s+='<path class="m-arm" d="M'+cx+' '+t+' L'+cx+' '+(t-7)+'"/>';
+      if(o.carry) s+='<circle class="m-rock-t" cx="'+cx+'" cy="'+(t-3)+'" r="5"/>';
+    }
+    // mast scan wedges
+    if(o.scan){
+      [-42,0,42].forEach(function(a){
+        var rad=a*Math.PI/180, len=54;
+        var x1=cx+Math.sin(rad-0.16)*len, y1=cy-Math.cos(rad-0.16)*len;
+        var x2=cx+Math.sin(rad+0.16)*len, y2=cy-Math.cos(rad+0.16)*len;
+        s+='<path class="m-scan" d="M'+cx+' '+cy+' L'+x1+' '+y1+' L'+x2+' '+y2+' Z"/>';
+      });
+    }
+    return s;
+  }
+
+  function mapSVG(sc){
+    var bx=tx(0), by=ty(Lm), bw=Wm*S, bh=Lm*S;
+    var s='<svg viewBox="0 0 '+VW+' '+VH+'" role="img" aria-label="Top-down arena map">';
+    // floor + walls
+    s+='<rect class="m-floor" x="'+bx+'" y="'+by+'" width="'+bw+'" height="'+bh+'" rx="6"/>';
+    // grid
+    for(var gx=1;gx<Wm;gx++){s+='<line class="m-grid" x1="'+tx(gx)+'" y1="'+by+'" x2="'+tx(gx)+'" y2="'+(by+bh)+'"/>';}
+    for(var gy=1;gy<Lm;gy++){s+='<line class="m-grid" x1="'+bx+'" y1="'+ty(gy)+'" x2="'+(bx+bw)+'" y2="'+ty(gy)+'"/>';}
+    s+='<rect class="m-wall" x="'+bx+'" y="'+by+'" width="'+bw+'" height="'+bh+'" rx="6"/>';
+    // base zone (bottom 0.5m)
+    s+='<rect class="m-base" x="'+(bx+6)+'" y="'+ty(0.5)+'" width="'+(bw-12)+'" height="'+(ty(0)-ty(0.5)-6)+'" rx="5"/>';
+    s+='<text class="m-label" x="'+(bx+bw/2)+'" y="'+(ty(0.24))+'" text-anchor="middle">BASE</text>';
+    s+='<text class="m-label" x="'+(bx+bw/2)+'" y="'+(ty(Lm)-9)+'" text-anchor="middle">DOWNRANGE</text>';
+    // deposit tray in base (scene 8)
+    if(sc.tray){
+      s+='<rect class="m-tray" x="'+(tx(0.7)-14)+'" y="'+(ty(0.5)+4)+'" width="28" height="16" rx="3"/>';
+      s+='<circle class="m-rock-t" cx="'+tx(0.7)+'" cy="'+(ty(0.5)+12)+'" r="5"/>';
+    }
+    // path
+    if(sc.path && sc.path.length>1){
+      var d="M"+tx(sc.path[0][0])+" "+ty(sc.path[0][1]);
+      for(var i=1;i<sc.path.length;i++) d+=" L"+tx(sc.path[i][0])+" "+ty(sc.path[i][1]);
+      s+='<path class="m-path" d="'+d+'"/>';
+    }
+    // rocks
+    ROCKS.forEach(function(r){
+      if(sc.collected && r.t) return; // target now in tray
+      var cls=r.t?"m-rock-t":"m-rock";
+      s+='<circle class="'+cls+'" cx="'+tx(r.x)+'" cy="'+ty(r.y)+'" r="'+r.r+'"/>';
+      if(r.t && sc.target){
+        s+='<circle class="m-ring" cx="'+tx(r.x)+'" cy="'+ty(r.y)+'" r="'+(r.r+6)+'"/>';
+        s+='<text class="m-label" x="'+tx(r.x)+'" y="'+(ty(r.y)-r.r-10)+'" text-anchor="middle" fill="var(--rust)">TARGET</text>';
+      }
+    });
+    // rover
+    s+=rover(sc.rx,sc.ry,sc.ro||{});
+    s+='</svg>';
+    return s;
+  }
+
+  /* ---------------- Scene data ---------------- */
+  var base=[0.7,0.28];
+  var SCENES=[
+    {n:"01",title:"Power-Up & Handshake",
+     text:"The rover sits in the base zone, dark. Power on: the ESP32 boots and joins Wi-Fi, the console reads LINK ESTABLISHED, and both camera feeds flick to life. Drive, arm, mast — all green.",
+     chips:[["cy","Systems","ESP32 boot · Wi-Fi"],["","Feed","Both cameras online"]],
+     rx:0.7,ry:0.28,ro:{dim:true},path:[base]},
+    {n:"02",title:"Deploy from Base",
+     text:"Tap forward. The rover rolls out of the base zone onto open terrain, the front camera showing the sand and rocks ahead.",
+     chips:[["rs","Control","Forward"],["","Feed","Front camera"]],
+     rx:0.7,ry:0.62,path:[base,[0.7,0.62]]},
+    {n:"03",title:"Survey the Field",
+     text:"The rover advances and pauses. Using the mast camera's pan and tilt, the operator sweeps left, right, up and down — scanning the terrain for an interesting rock.",
+     chips:[["rs","Control","Mast pan/tilt"],["","Feed","Mast camera"]],
+     rx:0.7,ry:1.15,ro:{scan:true},path:[base,[0.7,1.15]]},
+    {n:"04",title:"Target Acquired",
+     text:"On the mast feed a promising rock comes into view. The operator marks it as the target and points the rover toward its bearing.",
+     chips:[["rs","Control","Steer to bearing"],["","Feed","Mast camera"]],
+     rx:0.7,ry:1.24,target:true,path:[base,[0.7,1.24]]},
+    {n:"05",title:"Approach & Align",
+     text:"Switching to the front camera, the operator makes small left / right / forward moves to bring the rock squarely in front of the arm.",
+     chips:[["rs","Control","Fine drive"],["","Feed","Front camera"]],
+     rx:0.86,ry:1.38,target:true,path:[base,[0.7,1.24],[0.86,1.38]]},
+    {n:"06",title:"Collect the Sample",
+     text:"The arm deploys and lowers, the gripper closes on the rock, and it lifts. The sample is secured in the gripper.",
+     chips:[["cy","Systems","Arm + gripper"],["","Feed","Front camera"]],
+     rx:0.88,ry:1.44,ro:{arm:24,carry:true},target:true,path:[base,[0.86,1.38],[0.88,1.44]]},
+    {n:"07",title:"Return to Base",
+     text:"Holding the sample, the rover steers back across the box toward base, the operator watching the front feed to stay clear of the other rocks.",
+     chips:[["rs","Control","Drive to base"],["","Feed","Front camera"]],
+     rx:0.7,ry:0.85,ro:{carry:true},path:[[0.88,1.44],[0.7,0.85],base]},
+    {n:"08",title:"Deposit & Debrief",
+     text:"Back in the base zone the arm lowers and releases the rock into the collection tray. Mission log: 1 sample collected. The rover is ready for the next target.",
+     chips:[["cy","Systems","Arm release"],["","Outcome","Sample delivered"]],
+     rx:0.7,ry:0.30,ro:{arm:14},tray:true,collected:true,path:[[0.88,1.44],base]}
+  ];
+
+  var host=document.getElementById("scenes");
+  SCENES.forEach(function(sc){
+    var el=document.createElement("div");
+    el.className="scene";
+    var chips=sc.chips.map(function(c){
+      return '<span class="chip '+c[0]+'"><span class="ld"></span>'+c[1]+' <b>'+c[2]+'</b></span>';
+    }).join("");
+    el.innerHTML=
+      '<div class="map">'+mapSVG(sc)+'</div>'+
+      '<div class="body"><div class="snum">SCENE '+sc.n+'</div>'+
+      '<h3>'+sc.title+'</h3><p>'+sc.text+'</p>'+
+      '<div class="chips">'+chips+'</div></div>';
+    host.appendChild(el);
+  });
+
+  /* ---------------- Rover schematic (labeled) ---------------- */
+  (function(){
+    var W=520,H=360, cx=W/2;
+    var s='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Labeled rover schematic">';
+    var bx=cx-70, by=110, bw=140, bh=180;
+    function lbl(x,y,anchor,t){return '<text x="'+x+'" y="'+y+'" text-anchor="'+anchor+'" fill="var(--ink-2)" font-family="var(--mono)" font-size="12">'+t+'</text>';}
+    function lead(x1,y1,x2,y2){return '<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="var(--line-strong)" stroke-width="1"/><circle cx="'+x2+'" cy="'+y2+'" r="2.5" fill="var(--rust)"/>';}
+    // wheels
+    [[bx-16,by+18],[bx+bw-2,by+18],[bx-16,by+bh-56],[bx+bw-2,by+bh-56]].forEach(function(p){
+      s+='<rect x="'+p[0]+'" y="'+p[1]+'" width="18" height="38" rx="5" fill="var(--ink-2)"/>';
+    });
+    // body
+    s+='<rect x="'+bx+'" y="'+by+'" width="'+bw+'" height="'+bh+'" rx="14" fill="var(--surface-2)" stroke="var(--rust)" stroke-width="2"/>';
+    // mast pole + camera
+    s+='<circle cx="'+cx+'" cy="'+(by+bh*0.45)+'" r="7" fill="none" stroke="var(--cyan)" stroke-width="2"/>';
+    s+='<circle cx="'+cx+'" cy="'+(by+bh*0.45)+'" r="16" fill="none" stroke="var(--cyan)" stroke-width="1" stroke-dasharray="3 3"/>';
+    // front arm
+    var ay=by-2;
+    s+='<path d="M'+cx+' '+ay+' L'+cx+' '+(ay-46)+'" stroke="var(--cyan)" stroke-width="3" fill="none"/>';
+    s+='<path d="M'+(cx-9)+' '+(ay-40)+' L'+cx+' '+(ay-48)+' L'+(cx+9)+' '+(ay-40)+'" stroke="var(--cyan)" stroke-width="3" fill="none"/>';
+    // front camera
+    s+='<rect x="'+(cx-30)+'" y="'+(by+6)+'" width="16" height="11" rx="2" fill="none" stroke="var(--cyan)" stroke-width="2"/>';
+    // ESP32 board
+    s+='<rect x="'+(cx-24)+'" y="'+(by+bh-52)+'" width="48" height="30" rx="4" fill="none" stroke="var(--ink-2)" stroke-width="1.5"/>';
+    s+='<text x="'+cx+'" y="'+(by+bh-33)+'" text-anchor="middle" fill="var(--ink-2)" font-family="var(--mono)" font-size="10">ESP32</text>';
+
+    // labels with leaders
+    s+=lead(cx,ay-48,cx-120,40)+lbl(cx-126,44,"end","Robotic arm + gripper");
+    s+=lead(cx-22,by+11,cx-150,90)+lbl(cx-156,94,"end","Front camera");
+    s+=lead(cx,by+bh*0.45,cx+150,70)+lbl(cx+156,74,"start","Mast camera (pan/tilt)");
+    s+=lead(bx+bw-2,by+30,cx+150,150)+lbl(cx+156,154,"start","4× drive wheels");
+    s+=lead(cx,by+bh-37,cx+150,300)+lbl(cx+156,304,"start","ESP32 · Wi-Fi + BT");
+    s+=lead(bx,by+bh-40,cx-150,300)+lbl(cx-156,304,"end","LiPo + regulator");
+    // forward arrow
+    s+='<path d="M'+cx+' '+(ay-58)+' l-5 8 h10 z" fill="var(--rust)"/>';
+    s+='<text x="'+(cx+16)+'" y="'+(ay-54)+'" fill="var(--rust)" font-family="var(--mono)" font-size="11">FWD</text>';
+    s+='</svg>';
+    document.getElementById("rover-schematic").innerHTML=s;
+  })();
+
+  /* ---------------- Architecture diagram ---------------- */
+  (function(){
+    var W=880,H=340;
+    var s='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="System architecture diagram">';
+    function box(x,y,w,h,title,sub,color){
+      var g='<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" rx="10" fill="var(--surface-2)" stroke="'+color+'" stroke-width="2"/>';
+      g+='<text x="'+(x+w/2)+'" y="'+(y+h/2-4)+'" text-anchor="middle" fill="var(--ink)" font-family="var(--sans)" font-weight="700" font-size="14">'+title+'</text>';
+      g+='<text x="'+(x+w/2)+'" y="'+(y+h/2+15)+'" text-anchor="middle" fill="var(--ink-3)" font-family="var(--mono)" font-size="11">'+sub+'</text>';
+      return g;
+    }
+    function arrow(x1,y1,x2,y2,color,label,dash){
+      var mx=(x1+x2)/2, my=(y1+y2)/2;
+      var d=dash?' stroke-dasharray="5 4"':'';
+      var g='<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="'+color+'" stroke-width="2"'+d+'/>';
+      var ang=Math.atan2(y2-y1,x2-x1);
+      g+='<path d="M'+x2+' '+y2+' L'+(x2-10*Math.cos(ang-0.4))+' '+(y2-10*Math.sin(ang-0.4))+' L'+(x2-10*Math.cos(ang+0.4))+' '+(y2-10*Math.sin(ang+0.4))+' Z" fill="'+color+'"/>';
+      if(label) g+='<text x="'+mx+'" y="'+(my-7)+'" text-anchor="middle" fill="'+color+'" font-family="var(--mono)" font-size="10.5">'+label+'</text>';
+      return g;
+    }
+    var rust="var(--rust)", cyan="var(--cyan)", ink="var(--ink-2)";
+    // console (left)
+    s+=box(30,130,180,80,"Touchscreen Console","Godot app",rust);
+    // esp32 (center)
+    s+=box(350,130,180,80,"ESP32 (on rover)","motors · arm · mast",rust);
+    // actuators (right)
+    s+=box(680,40,170,52,"Drive motors","H-bridge × 4",ink);
+    s+=box(680,144,170,52,"Arm + gripper","servos",ink);
+    s+=box(680,248,170,52,"Mast pan/tilt","2 servos",ink);
+    // cameras -> monitors (bottom band)
+    s+=box(30,270,180,52,"Front IP camera","Wi-Fi stream",cyan);
+    s+=box(350,270,180,52,"Monitor 1 / 2","live feeds",cyan);
+
+    // arrows control
+    s+=arrow(210,160,350,160,rust,"commands (Wi-Fi/BT)");
+    s+=arrow(350,185,210,185,ink,"telemetry",true);
+    s+=arrow(530,160,680,66,ink,"");
+    s+=arrow(530,168,680,170,ink,"");
+    s+=arrow(530,176,680,274,ink,"");
+    // video
+    s+=arrow(210,296,350,296,cyan,"Wi-Fi video");
+    s+='</svg>';
+    document.getElementById("arch-diagram").innerHTML=s;
+  })();
+
+  /* ---------------- Scroll reveal ---------------- */
+  var reduce=window.matchMedia("(prefers-reduced-motion:reduce)").matches;
+  if(reduce){
+    document.querySelectorAll(".scene").forEach(function(e){e.classList.add("in");});
+  } else if("IntersectionObserver" in window){
+    var io=new IntersectionObserver(function(es){
+      es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add("in"); io.unobserve(e.target);} });
+    },{threshold:.15});
+    document.querySelectorAll(".scene").forEach(function(e){io.observe(e);});
+  } else {
+    document.querySelectorAll(".scene").forEach(function(e){e.classList.add("in");});
+  }
+})();
+</script>

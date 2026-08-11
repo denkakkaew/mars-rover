@@ -1,0 +1,21 @@
+# Root ignores. Per-project rules live in console/.gitignore and firmware/.gitignore.
+
+# Word/Office lock files, written next to an open document
+~$*.docx
+~$*.doc
+~$*.xlsx
+
+# Exported reviewer copies of the proposal — downstream artifacts, not sources.
+# The sources are plan/mars-rover, plan/storyboard.md and plan/storyboard.html.
+plan/*.docx
+
+# Windows shell noise
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
