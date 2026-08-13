@@ -11,7 +11,10 @@ extends Control
 ## get added alongside the camera feeds.
 
 const DRIVE_SPEED := 1.0
-const TURN_SPEED := 0.6
+
+## Steering demand at full press. There is no partial lock to ask for on this chassis
+## (docs/protocol.md 3.2.1), so the pad asks for all of it and lets the rover round.
+const STEER_DEMAND := 1.0
 
 # --- Touch sizing ---------------------------------------------------------------------
 #
@@ -59,7 +62,11 @@ enum Display { DISCONNECTED, CONNECTING, LINKED, SAFE_MODE, STALE, INCOMPATIBLE 
 @onready var _rssi_label: Label = $Margin/Layout/Telemetry/Strip/RssiLabel
 @onready var _rtt_label: Label = $Margin/Layout/Telemetry/Strip/RttLabel
 @onready var _firmware_label: Label = $Margin/Layout/Readiness/Row/FirmwareLabel
+@onready var _drive_panel: PanelContainer = $Margin/Layout/Main/DrivePanel
 @onready var _drive_pad: GridContainer = $Margin/Layout/Main/DrivePanel/Column/DrivePad
+@onready var _speed_button: Button = $Margin/Layout/Main/DrivePanel/Column/SpeedMode
+@onready var _steering_label: Label = $Margin/Layout/Main/DrivePanel/Column/SteeringLabel
+@onready var _nudge_row: HBoxContainer = $Margin/Layout/Main/DrivePanel/Column/NudgeRow
 @onready var _mast_panel: PanelContainer = $Margin/Layout/Main/MastPanel
 @onready var _analysis_panel: PanelContainer = $Margin/Layout/Main/AnalysisPanel
 
@@ -70,13 +77,40 @@ enum Display { DISCONNECTED, CONNECTING, LINKED, SAFE_MODE, STALE, INCOMPATIBLE 
 	"rfid": $Margin/Layout/Readiness/Row/RfidChip,
 }
 
-## Drive pad button name -> (left wheel throttle, right wheel throttle).
+## Drive pad button name -> (throttle, steer). Steer is negative-left, as on the wire.
+##
+## **The two axes are separate, and buttons combine** (step S.15). FORWARD sets throttle
+## and nothing else; LEFT sets steering and nothing else. Held together they make a
+## turn, which on a steered chassis is the only kind of turn there is — under the old
+## skid-steer pad, LEFT alone pivoted the rover on the spot, and that manoeuvre no longer
+## exists. Summing held buttons rather than replacing on each press is what lets the
+## operator hold FORWARD and tap LEFT, which is the normal way to drive this thing.
 const DRIVE_VECTORS := {
-	"Forward": Vector2(DRIVE_SPEED, DRIVE_SPEED),
-	"Back": Vector2(-DRIVE_SPEED, -DRIVE_SPEED),
-	"Left": Vector2(-TURN_SPEED, TURN_SPEED),
-	"Right": Vector2(TURN_SPEED, -TURN_SPEED),
+	"Forward": Vector2(DRIVE_SPEED, 0.0),
+	"Back": Vector2(-DRIVE_SPEED, 0.0),
+	"Left": Vector2(0.0, -STEER_DEMAND),
+	"Right": Vector2(0.0, STEER_DEMAND),
 }
+
+## Nudge button name -> (throttle, steer). The link scales and times it; these are
+## directions, not speeds (step S.13).
+##
+## **The steering nudges carry throttle on purpose.** A steering-only nudge would swing
+## the wheels and move the rover nowhere, which is not a nudge at all — so ARC L and
+## ARC R are a short forward step taken at full lock. That timed tap is the fine heading
+## correction three-position steering otherwise cannot make
+## (docs/chassis-envelope.md 8.5).
+const NUDGE_VECTORS := {
+	"NudgeForward": Vector2(DRIVE_SPEED, 0.0),
+	"NudgeBack": Vector2(-DRIVE_SPEED, 0.0),
+	"NudgeLeft": Vector2(DRIVE_SPEED, -STEER_DEMAND),
+	"NudgeRight": Vector2(DRIVE_SPEED, STEER_DEMAND),
+}
+
+## Which pad buttons are currently held, name -> vector. Held rather than derived from
+## the buttons themselves because a disabled Button never emits button_up, so the link
+## dropping mid-press would otherwise leave a phantom press in the sum forever.
+var _held: Dictionary = {}
 
 var _display: Display = Display.DISCONNECTED
 var _rover_mode := ""
@@ -123,20 +157,103 @@ func _ready() -> void:
 			# link repeats the command while held, because the rover cuts the motors
 			# after 500 ms of silence (docs/protocol.md 6.5).
 			var vector: Vector2 = DRIVE_VECTORS[button.name]
-			button.button_down.connect(_on_drive_pressed.bind(vector))
-			button.button_up.connect(_on_drive_released)
+			button.button_down.connect(_on_drive_pressed.bind(button.name, vector))
+			button.button_up.connect(_on_drive_released.bind(button.name))
 		elif button.name == "Stop":
 			button.pressed.connect(_link.send_stop)
+
+	# Fine drive (step S.13). Nudges are `pressed`, not hold-to-drive: the whole point
+	# is a step whose length the link decides, not one the operator has to time.
+	for button in _nudge_row.get_children():
+		if button is Button and NUDGE_VECTORS.has(button.name):
+			button.pressed.connect(_on_nudge_pressed.bind(NUDGE_VECTORS[button.name]))
+	_speed_button.pressed.connect(_on_speed_toggled)
+	_link.speed_mode_changed.connect(_on_speed_mode_changed)
+	_link.nudge_state_changed.connect(_on_nudge_state_changed)
+	_refresh_speed_button()
+	_refresh_steering_label()
 
 	_refresh()
 
 
-func _on_drive_pressed(vector: Vector2) -> void:
-	_link.hold_drive(vector.x, vector.y)
+func _on_drive_pressed(name: StringName, vector: Vector2) -> void:
+	_held[name] = vector
+	_apply_pad()
 
 
-func _on_drive_released() -> void:
-	_link.release_drive()
+func _on_drive_released(name: StringName) -> void:
+	_held.erase(name)
+	_apply_pad()
+
+
+## Sums the held buttons into one throttle and one steering demand, and sends that.
+## Opposed presses cancel — FORWARD with BACK is a stop, LEFT with RIGHT is straight —
+## which is the same answer the rover would reach anyway and avoids the pad arguing with
+## itself about which finger won.
+func _apply_pad() -> void:
+	if _held.is_empty():
+		_link.release_drive()
+		_refresh_steering_label()
+		return
+
+	var throttle := 0.0
+	var steer := 0.0
+	for vector: Vector2 in _held.values():
+		throttle += vector.x
+		steer += vector.y
+	_link.hold_drive(clampf(throttle, -1.0, 1.0), clampf(steer, -1.0, 1.0))
+	_refresh_steering_label()
+
+
+func _on_nudge_pressed(vector: Vector2) -> void:
+	_link.nudge(vector.x, vector.y)
+
+
+func _on_speed_toggled() -> void:
+	_link.toggle_speed_mode()
+
+
+func _on_speed_mode_changed(_mode: int) -> void:
+	_refresh_speed_button()
+
+
+## A running nudge is shown on the pad, not just implied by the rover moving. Without it
+## the operator has no way to tell "the step is still going" from "nothing happened",
+## and taps again — which is how you drive into a rock.
+func _on_nudge_state_changed(running: bool) -> void:
+	_nudge_row.modulate = COLOR_WARN if running else Color.WHITE
+	_refresh_steering_label()
+
+
+## The pad's honesty about what steering actually does here (docs/protocol.md 6.4).
+##
+## Three-position steering with no throttle behind it moves the wheels and not the rover.
+## An operator who presses LEFT expecting the old skid-steer pivot, sees nothing happen,
+## and presses harder is the exact failure this label exists to prevent — so that state
+## gets a loud amber line rather than silence.
+func _refresh_steering_label() -> void:
+	var kind: String = _link.steering_kind()
+	if kind.is_empty():
+		_steering_label.text = "STEERING  ·  ---"
+		_steering_label.modulate = COLOR_IDLE
+		return
+
+	if _link.is_steering_without_throttle():
+		_steering_label.text = "WHEELS TURNED  ·  NO THROTTLE — ROVER WILL NOT MOVE"
+		_steering_label.modulate = COLOR_WARN
+		return
+
+	_steering_label.text = "STEERING  ·  %s  ·  no turn on the spot" % kind
+	_steering_label.modulate = COLOR_IDLE
+
+
+## Which mode the pad is in has to be readable at a glance. An operator who believes
+## they are in PRECISION and is not will put the rover into the glass.
+func _refresh_speed_button() -> void:
+	var precision: bool = _link.speed_mode == _link.Speed.PRECISION
+	_speed_button.text = "SPEED  ·  %s" % _link.speed_mode_name()
+	_speed_button.button_pressed = precision
+	_speed_button.modulate = COLOR_WARN if precision else COLOR_READY
 
 
 func _on_link_changed(_new_state: int) -> void:
@@ -149,6 +266,9 @@ func _on_stale_changed(_stale: bool) -> void:
 
 func _on_handshake_completed(rover_version: int, firmware: String, caps: Array) -> void:
 	_firmware_text = "FW %s  v%d  [%s]" % [firmware, rover_version, ", ".join(caps)]
+	# The steering kind arrives with the handshake, so the pad cannot label itself until
+	# now — before this it does not know which rover it is talking to.
+	_refresh_steering_label()
 	_refresh()
 
 
@@ -183,6 +303,7 @@ func _exit_tree() -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_WM_CLOSE_REQUEST:
 		if is_instance_valid(_link):
+			_held.clear()
 			_link.release_drive()
 
 
@@ -264,7 +385,7 @@ func _audit_touch_targets() -> void:
 
 func _interactive_controls() -> Array[Button]:
 	var found: Array[Button] = []
-	for root in [_drive_pad, _mast_panel, _analysis_panel]:
+	for root in [_drive_panel, _mast_panel, _analysis_panel]:
 		_collect_buttons(root, found)
 	return found
 
@@ -418,12 +539,19 @@ func _refresh_chips() -> void:
 func _refresh_drive_pad() -> void:
 	var enabled := _display == Display.LINKED or _display == Display.SAFE_MODE
 
-	for button in _drive_pad.get_children():
-		if button is Button:
-			button.disabled = not enabled
-	_drive_pad.modulate = Color.WHITE if enabled else Color(1, 1, 1, 0.35)
+	# The whole panel, so the S.13 speed toggle and nudge row go dead with the pad
+	# rather than staying tappable against a rover that is not listening.
+	var buttons: Array[Button] = []
+	_collect_buttons(_drive_panel, buttons)
+	for button in buttons:
+		button.disabled = not enabled
+	_drive_panel.modulate = Color.WHITE if enabled else Color(1, 1, 1, 0.35)
 
 	if not enabled:
 		# A disabled Button never emits button_up, so a link that drops mid-press would
-		# otherwise leave the repeat running against a rover that is already gone.
+		# otherwise leave the repeat running against a rover that is already gone — and
+		# leave a phantom press in `_held` that reappears the moment the link recovers.
+		# The release also cancels a nudge in flight.
+		_held.clear()
 		_link.release_drive()
+	_refresh_steering_label()
