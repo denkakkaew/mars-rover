@@ -6,7 +6,7 @@
 //
 //   lib/Protocol — JSON frame <-> typed Command, and telemetry serialisation
 //   lib/Safety   — the failsafe state machine
-//   lib/Drive    — H-bridge throttle
+//   lib/Drive    — H-bridge throttle and steering
 //
 // What is left here is the part that genuinely needs the board: Wi-Fi, the WebSocket
 // server, the battery ADC, and the wiring between those three. Camera video is
@@ -26,9 +26,8 @@
 
 namespace {
 
-Drive g_drive({PIN_LEFT_IN1, PIN_LEFT_IN2, PIN_LEFT_PWM, LEDC_CHANNEL_LEFT},
-              {PIN_RIGHT_IN1, PIN_RIGHT_IN2, PIN_RIGHT_PWM, LEDC_CHANNEL_RIGHT},
-              PIN_MOTOR_STANDBY);
+Drive g_drive({PIN_DRIVE_IN1, PIN_DRIVE_IN2, PIN_DRIVE_EN, LEDC_CHANNEL_DRIVE},
+              {PIN_STEER_IN1, PIN_STEER_IN2, PIN_STEER_EN, LEDC_CHANNEL_STEER});
 
 WebSocketsServer g_server(CONTROL_WS_PORT);
 safety::Failsafe g_failsafe(COMMAND_TIMEOUT_MS);
@@ -43,7 +42,12 @@ bool g_handshake_expired = false;
 // Subsystems this build actually has (docs/protocol.md 4.1). "rfid" joins the list when
 // Phase 2 fits the reader and "mast" when Phase 3 fits the servos; until then the console
 // greys those out rather than sending commands into a void.
-const char *const kCapabilities[] = {"drive"};
+//
+// "steer3" declares three-position steering, so the console knows a `steer` of 0.3 will be
+// rounded away rather than honoured. Exactly one steering token must accompany "drive" —
+// a later proportional-steering build swaps it for "steerprop" and needs no version bump,
+// which is the whole reason `steer` stayed a float on the wire (docs/protocol.md 3.2.1).
+const char *const kCapabilities[] = {"drive", "steer3"};
 
 // One shared outbound buffer. Every frame is built and sent within a single call, and
 // the WebSocket library copies before returning, so there is nothing to overlap.
@@ -139,7 +143,7 @@ void handleCommand(uint8_t client, const protocol::Command &cmd, uint32_t now) {
 
     case protocol::CommandType::Drive:
       if (g_state == safety::State::Armed) {
-        g_drive.setThrottle(cmd.left, cmd.right);
+        g_drive.setDrive(cmd.throttle, cmd.steer);
       }
       break;
 

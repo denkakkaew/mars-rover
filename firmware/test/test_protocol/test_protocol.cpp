@@ -33,80 +33,165 @@ void tearDown(void) {}
 
 // ---------------------------------------------------------------------------------
 // drive — the command that moves the rover
+//
+// v2 (step S.14): throttle plus steering, after step 0.2 chose a chassis with one driven
+// axle and one steered one. `l`/`r` are retired, not merely gone — see the block below.
 // ---------------------------------------------------------------------------------
 
 void test_drive_valid(void) {
-  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"l\":0.6,\"r\":-0.6}");
+  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"fwd\":0.6,\"steer\":-1.0}");
   ASSERT_TYPE(protocol::CommandType::Drive, cmd);
   ASSERT_ERROR(protocol::ParseError::None, cmd);
-  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.6f, cmd.left);
-  TEST_ASSERT_FLOAT_WITHIN(0.0001f, -0.6f, cmd.right);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.6f, cmd.throttle);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001f, -1.0f, cmd.steer);
 }
 
-void test_drive_accepts_integer_throttle(void) {
+void test_drive_accepts_integer_values(void) {
   // JSON has one number type; 1 and 1.0 must mean the same thing.
-  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"l\":1,\"r\":-1}");
+  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"fwd\":1,\"steer\":-1}");
   ASSERT_TYPE(protocol::CommandType::Drive, cmd);
-  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 1.0f, cmd.left);
-  TEST_ASSERT_FLOAT_WITHIN(0.0001f, -1.0f, cmd.right);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 1.0f, cmd.throttle);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001f, -1.0f, cmd.steer);
 }
 
 void test_drive_clamps_out_of_range(void) {
   // Clamped, not rejected (protocol.md 3.2) — a console bug must not stop the rover
   // responding, it must just not make it go faster than full.
-  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"l\":2.5,\"r\":-9.0}");
+  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"fwd\":2.5,\"steer\":-9.0}");
   ASSERT_TYPE(protocol::CommandType::Drive, cmd);
-  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 1.0f, cmd.left);
-  TEST_ASSERT_FLOAT_WITHIN(0.0001f, -1.0f, cmd.right);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 1.0f, cmd.throttle);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001f, -1.0f, cmd.steer);
 }
 
 void test_drive_missing_fields_default_to_zero(void) {
   const protocol::Command cmd = parseText("{\"cmd\":\"drive\"}");
   ASSERT_TYPE(protocol::CommandType::Drive, cmd);
-  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.0f, cmd.left);
-  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.0f, cmd.right);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.0f, cmd.throttle);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.0f, cmd.steer);
 }
 
-void test_drive_one_side_only(void) {
-  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"l\":0.5}");
+void test_drive_steer_without_throttle(void) {
+  // Legal, and the shape of the "wheels turn, rover does not move" case: a steered
+  // chassis cannot pivot in place (protocol.md 3.2). The parser has no opinion on it.
+  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"steer\":1.0}");
   ASSERT_TYPE(protocol::CommandType::Drive, cmd);
-  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.5f, cmd.left);
-  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.0f, cmd.right);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.0f, cmd.throttle);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 1.0f, cmd.steer);
+}
+
+void test_drive_throttle_without_steer(void) {
+  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"fwd\":0.5}");
+  ASSERT_TYPE(protocol::CommandType::Drive, cmd);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.5f, cmd.throttle);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.0f, cmd.steer);
 }
 
 void test_drive_rejects_string_throttle(void) {
   // The F4 case: "0.6" must not be coerced into 0.6 (protocol.md 2.5).
-  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"l\":\"0.6\"}");
+  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"fwd\":\"0.6\"}");
   ASSERT_TYPE(protocol::CommandType::Malformed, cmd);
   ASSERT_ERROR(protocol::ParseError::BadField, cmd);
 }
 
 void test_drive_rejects_bool_throttle(void) {
   // true is not 1 (protocol.md 2.7).
-  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"l\":true}");
+  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"fwd\":true}");
   ASSERT_TYPE(protocol::CommandType::Malformed, cmd);
   ASSERT_ERROR(protocol::ParseError::BadField, cmd);
 }
 
-void test_drive_rejects_object_throttle(void) {
-  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"r\":{\"v\":1}}");
+void test_drive_rejects_object_steer(void) {
+  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"steer\":{\"v\":1}}");
+  ASSERT_TYPE(protocol::CommandType::Malformed, cmd);
+  ASSERT_ERROR(protocol::ParseError::BadField, cmd);
+}
+
+void test_drive_rejects_string_steer(void) {
+  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"fwd\":0.5,\"steer\":\"left\"}");
   ASSERT_TYPE(protocol::CommandType::Malformed, cmd);
   ASSERT_ERROR(protocol::ParseError::BadField, cmd);
 }
 
 void test_drive_null_field_is_absent_not_invalid(void) {
-  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"l\":null,\"r\":0.4}");
+  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"fwd\":null,\"steer\":0.4}");
   ASSERT_TYPE(protocol::CommandType::Drive, cmd);
-  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.0f, cmd.left);
-  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.4f, cmd.right);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.0f, cmd.throttle);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.4f, cmd.steer);
 }
 
 void test_drive_ignores_unknown_fields(void) {
   // Additive fields must stay backward compatible (protocol.md 2.3).
   const protocol::Command cmd =
-      parseText("{\"cmd\":\"drive\",\"l\":0.2,\"r\":0.2,\"future\":42}");
+      parseText("{\"cmd\":\"drive\",\"fwd\":0.2,\"steer\":0.2,\"future\":42}");
   ASSERT_TYPE(protocol::CommandType::Drive, cmd);
-  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.2f, cmd.left);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.2f, cmd.throttle);
+}
+
+// ---------------------------------------------------------------------------------
+// The retired v1 fields (protocol.md 2.3a, 5.1)
+//
+// This block is the reason the version bumped, so it gets the closest attention in the
+// file. `l`/`r` must be *rejected*, not ignored: ignoring them (which §2.3 would do to any
+// unknown field) leaves a valid zero-throttle `drive` that refreshes the failsafe, so a v1
+// console would hold FORWARD against an armed rover that never moves. Rejecting them makes
+// the frame malformed, which does not refresh the timer, so the rover drops to safe mode
+// and says so.
+// ---------------------------------------------------------------------------------
+
+void test_drive_rejects_retired_left(void) {
+  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"l\":0.6}");
+  ASSERT_TYPE(protocol::CommandType::Malformed, cmd);
+  ASSERT_ERROR(protocol::ParseError::RetiredField, cmd);
+}
+
+void test_drive_rejects_retired_right(void) {
+  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"r\":0.6}");
+  ASSERT_TYPE(protocol::CommandType::Malformed, cmd);
+  ASSERT_ERROR(protocol::ParseError::RetiredField, cmd);
+}
+
+void test_drive_rejects_a_whole_v1_frame(void) {
+  // Verbatim off a v1 console. This is the exact frame that used to drive the rover.
+  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"l\":0.6,\"r\":-0.6}");
+  ASSERT_TYPE(protocol::CommandType::Malformed, cmd);
+  ASSERT_ERROR(protocol::ParseError::RetiredField, cmd);
+}
+
+void test_retired_fields_do_not_refresh_the_failsafe(void) {
+  // The consequence that makes the rejection worth having, stated as its own assertion.
+  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"l\":1.0,\"r\":1.0}");
+  TEST_ASSERT_FALSE(protocol::refreshesFailsafe(cmd.type));
+}
+
+void test_retired_fields_beat_the_new_ones(void) {
+  // A console sending both is confused about which version it speaks, and the safe answer
+  // is to refuse the frame rather than to pick the half we like.
+  const protocol::Command cmd =
+      parseText("{\"cmd\":\"drive\",\"fwd\":0.6,\"steer\":0,\"l\":0.6,\"r\":0.6}");
+  ASSERT_TYPE(protocol::CommandType::Malformed, cmd);
+  ASSERT_ERROR(protocol::ParseError::RetiredField, cmd);
+}
+
+void test_retired_names_are_only_retired_on_drive(void) {
+  // `l` and `r` are retired from `drive`, not reserved words. A different verb carrying a
+  // field that happens to be named `l` is just an unknown field (protocol.md 2.3).
+  const protocol::Command cmd = parseText("{\"cmd\":\"mast\",\"pan\":10,\"l\":0.6}");
+  ASSERT_TYPE(protocol::CommandType::Mast, cmd);
+  ASSERT_ERROR(protocol::ParseError::None, cmd);
+}
+
+void test_null_retired_field_is_absent(void) {
+  // §2.4 makes null indistinguishable from absent, and that rule is not suspended here —
+  // a console that never sets `l` is not a v1 console.
+  const protocol::Command cmd = parseText("{\"cmd\":\"drive\",\"fwd\":0.3,\"l\":null}");
+  ASSERT_TYPE(protocol::CommandType::Drive, cmd);
+  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.3f, cmd.throttle);
+}
+
+void test_protocol_version_is_two(void) {
+  // Guards the bump itself: dropping this back to 1 while `l`/`r` stay retired would
+  // reintroduce exactly the silent failure §5.1 describes.
+  TEST_ASSERT_EQUAL_INT(2, protocol::kVersion);
 }
 
 // ---------------------------------------------------------------------------------
@@ -158,7 +243,7 @@ void test_unknown_cmd_is_ignored_not_malformed(void) {
 }
 
 void test_oversize_frame_rejected(void) {
-  std::string frame = "{\"cmd\":\"drive\",\"l\":1.0,\"r\":1.0,\"pad\":\"";
+  std::string frame = "{\"cmd\":\"drive\",\"fwd\":1.0,\"steer\":1.0,\"pad\":\"";
   frame.append(600, 'x');
   frame += "\"}";
   TEST_ASSERT_GREATER_THAN_UINT32(protocol::kMaxFrameBytes, frame.size());
@@ -170,7 +255,7 @@ void test_oversize_frame_rejected(void) {
 
 void test_frame_at_size_limit_is_accepted(void) {
   // The boundary itself is legal; only *over* the limit is rejected.
-  std::string frame = "{\"cmd\":\"drive\",\"l\":1.0,\"r\":1.0,\"pad\":\"";
+  std::string frame = "{\"cmd\":\"drive\",\"fwd\":1.0,\"steer\":1.0,\"pad\":\"";
   const std::string tail = "\"}";
   frame.append(protocol::kMaxFrameBytes - frame.size() - tail.size(), 'x');
   frame += tail;
@@ -191,9 +276,9 @@ void test_stop(void) {
 }
 
 void test_hello_valid(void) {
-  const protocol::Command cmd = parseText("{\"cmd\":\"hello\",\"v\":1}");
+  const protocol::Command cmd = parseText("{\"cmd\":\"hello\",\"v\":2}");
   ASSERT_TYPE(protocol::CommandType::Hello, cmd);
-  TEST_ASSERT_EQUAL_INT(1, cmd.version);
+  TEST_ASSERT_EQUAL_INT(2, cmd.version);
 }
 
 void test_hello_version_mismatch_still_parses(void) {
@@ -201,6 +286,15 @@ void test_hello_version_mismatch_still_parses(void) {
   const protocol::Command cmd = parseText("{\"cmd\":\"hello\",\"v\":99}");
   ASSERT_TYPE(protocol::CommandType::Hello, cmd);
   TEST_ASSERT_EQUAL_INT(99, cmd.version);
+}
+
+void test_hello_from_a_v1_console_parses_as_a_mismatch(void) {
+  // The primary defence in protocol.md 5.1. The parser's job is only to surface the
+  // number honestly; main.cpp compares it to kVersion and refuses to arm.
+  const protocol::Command cmd = parseText("{\"cmd\":\"hello\",\"v\":1}");
+  ASSERT_TYPE(protocol::CommandType::Hello, cmd);
+  TEST_ASSERT_EQUAL_INT(1, cmd.version);
+  TEST_ASSERT_NOT_EQUAL_INT(protocol::kVersion, cmd.version);
 }
 
 void test_hello_requires_version(void) {
@@ -384,14 +478,17 @@ void test_telemetry_mode_names(void) {
 }
 
 void test_hello_reply(void) {
-  const char *caps[] = {"drive"};
+  // The steering token rides in caps alongside the subsystem list, so the console learns
+  // that `steer` is thresholded here without the protocol version having to say so
+  // (protocol.md 4.1). That is what keeps a future proportional build off a v3.
+  const char *caps[] = {"drive", "steer3"};
   char out[protocol::kMaxFrameBytes];
   const size_t length =
-      protocol::serializeHello(protocol::kVersion, "0.1.0", caps, 1, out, sizeof(out));
+      protocol::serializeHello(protocol::kVersion, "0.1.0", caps, 2, out, sizeof(out));
 
   TEST_ASSERT_GREATER_THAN_UINT32(0, length);
-  TEST_ASSERT_EQUAL_STRING("{\"t\":\"hello\",\"v\":1,\"fw\":\"0.1.0\",\"caps\":[\"drive\"]}",
-                           out);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"t\":\"hello\",\"v\":2,\"fw\":\"0.1.0\",\"caps\":[\"drive\",\"steer3\"]}", out);
 }
 
 void test_pong_echoes_timestamp_exactly(void) {
@@ -422,15 +519,26 @@ int main(int, char **) {
   UNITY_BEGIN();
 
   RUN_TEST(test_drive_valid);
-  RUN_TEST(test_drive_accepts_integer_throttle);
+  RUN_TEST(test_drive_accepts_integer_values);
   RUN_TEST(test_drive_clamps_out_of_range);
   RUN_TEST(test_drive_missing_fields_default_to_zero);
-  RUN_TEST(test_drive_one_side_only);
+  RUN_TEST(test_drive_steer_without_throttle);
+  RUN_TEST(test_drive_throttle_without_steer);
   RUN_TEST(test_drive_rejects_string_throttle);
   RUN_TEST(test_drive_rejects_bool_throttle);
-  RUN_TEST(test_drive_rejects_object_throttle);
+  RUN_TEST(test_drive_rejects_object_steer);
+  RUN_TEST(test_drive_rejects_string_steer);
   RUN_TEST(test_drive_null_field_is_absent_not_invalid);
   RUN_TEST(test_drive_ignores_unknown_fields);
+
+  RUN_TEST(test_drive_rejects_retired_left);
+  RUN_TEST(test_drive_rejects_retired_right);
+  RUN_TEST(test_drive_rejects_a_whole_v1_frame);
+  RUN_TEST(test_retired_fields_do_not_refresh_the_failsafe);
+  RUN_TEST(test_retired_fields_beat_the_new_ones);
+  RUN_TEST(test_retired_names_are_only_retired_on_drive);
+  RUN_TEST(test_null_retired_field_is_absent);
+  RUN_TEST(test_protocol_version_is_two);
 
   RUN_TEST(test_malformed_json);
   RUN_TEST(test_empty_frame);
@@ -445,6 +553,7 @@ int main(int, char **) {
   RUN_TEST(test_stop);
   RUN_TEST(test_hello_valid);
   RUN_TEST(test_hello_version_mismatch_still_parses);
+  RUN_TEST(test_hello_from_a_v1_console_parses_as_a_mismatch);
   RUN_TEST(test_hello_requires_version);
   RUN_TEST(test_hello_does_not_refresh_failsafe);
   RUN_TEST(test_ping_preserves_timestamp);

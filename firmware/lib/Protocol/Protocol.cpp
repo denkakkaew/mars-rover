@@ -39,18 +39,32 @@ bool readOptionalNumber(JsonVariantConst value, float &out, bool &present) {
 }
 
 Command parseDrive(JsonObjectConst doc) {
+  // v1's per-side throttle is *retired*, not merely unknown, so it is rejected rather than
+  // ignored (protocol.md 2.3a). This is the second line of defence behind the handshake: a
+  // v1 frame's `l`/`r` would otherwise default away and leave a valid zero-throttle command
+  // that refreshes the failsafe, so the rover would sit armed and inert while the operator
+  // held FORWARD. Malformed instead means the timer is not refreshed and the rover visibly
+  // drops to safe mode within COMMAND_TIMEOUT_MS.
+  if (!doc["l"].isNull() || !doc["r"].isNull()) {
+    return rejected(ParseError::RetiredField);
+  }
+
   Command out;
   out.type = CommandType::Drive;
   out.error = ParseError::None;
 
   bool present = false;
-  if (!readOptionalNumber(doc["l"], out.left, present)) return rejected(ParseError::BadField);
-  if (!readOptionalNumber(doc["r"], out.right, present)) return rejected(ParseError::BadField);
+  if (!readOptionalNumber(doc["fwd"], out.throttle, present)) {
+    return rejected(ParseError::BadField);
+  }
+  if (!readOptionalNumber(doc["steer"], out.steer, present)) {
+    return rejected(ParseError::BadField);
+  }
 
   // Out of range is clamped, not rejected — the console clamps too, and both are
   // required (protocol.md 3.2).
-  out.left = clamp(out.left, -1.0f, 1.0f);
-  out.right = clamp(out.right, -1.0f, 1.0f);
+  out.throttle = clamp(out.throttle, -1.0f, 1.0f);
+  out.steer = clamp(out.steer, -1.0f, 1.0f);
   return out;
 }
 

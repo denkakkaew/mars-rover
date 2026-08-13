@@ -14,7 +14,12 @@
 namespace protocol {
 
 /// Bumped only for a breaking change; additive fields do not bump it (protocol.md 5).
-constexpr int kVersion = 1;
+///
+/// v2 (step S.14): `drive` carries throttle + steering instead of per-side throttle, after
+/// step 0.2 chose a chassis with one driven axle and one steered one. protocol.md 5.1 works
+/// through why that is breaking where the Revision 2 changes at v1 were not — in short, a v1
+/// `drive` would parse at a v2 rover as a valid zero-throttle command and move nothing.
+constexpr int kVersion = 2;
 
 /// Frames larger than this are dropped whole, never partially applied (protocol.md 1).
 constexpr size_t kMaxFrameBytes = 512;
@@ -36,11 +41,12 @@ enum class CommandType : uint8_t {
 /// Why a frame was rejected. Diagnostic only — every value means "dropped".
 enum class ParseError : uint8_t {
   None,
-  TooLarge,     ///< Over kMaxFrameBytes
-  BadJson,      ///< Not valid JSON
-  NotAnObject,  ///< Valid JSON, but not an object
-  MissingCmd,   ///< No `cmd`, or `cmd` was not a string
-  BadField,     ///< A known field carried the wrong type (protocol.md 2.5)
+  TooLarge,      ///< Over kMaxFrameBytes
+  BadJson,       ///< Not valid JSON
+  NotAnObject,   ///< Valid JSON, but not an object
+  MissingCmd,    ///< No `cmd`, or `cmd` was not a string
+  BadField,      ///< A known field carried the wrong type (protocol.md 2.5)
+  RetiredField,  ///< A field this version removed, e.g. v1's `l`/`r` (protocol.md 2.3a)
 };
 
 /// One decoded console -> rover frame. Fields are only meaningful for their own `type`.
@@ -50,8 +56,12 @@ struct Command {
 
   int version = 0;  ///< Hello: protocol version the console speaks
 
-  float left = 0.0f;   ///< Drive: left-side throttle, already clamped to -1..1
-  float right = 0.0f;  ///< Drive: right-side throttle, already clamped to -1..1
+  /// Drive: throttle, already clamped to -1..1. Positive is forward.
+  float throttle = 0.0f;
+  /// Drive: steering demand, already clamped to -1..1. **Negative is left.** A demand with
+  /// no throttle moves the wheels and not the rover — a steered chassis cannot pivot in
+  /// place (protocol.md 3.2). How the demand is rounded is the Drive module's business.
+  float steer = 0.0f;
 
   bool has_pan = false;   ///< Mast: false means "hold this axis" (protocol.md 3.4)
   bool has_tilt = false;
