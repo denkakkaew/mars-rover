@@ -1,20 +1,25 @@
-# Control Protocol v1 — console ↔ rover
+# Control Protocol v2 — console ↔ rover
 
 Authoritative definition of every message exchanged between the Godot operator console and
 the ESP32 rover firmware. Companion to [plan/storyboard-rev2.md](../plan/storyboard-rev2.md)
-§5.2/§5.5 and [IMPLEMENTATION_PLAN.md](../IMPLEMENTATION_PLAN.md) steps S.2 and S.9.
+§5.2/§5.5 and [IMPLEMENTATION_PLAN.md](../IMPLEMENTATION_PLAN.md) steps S.2, S.9 and S.14.
 
 **Tracks proposal Revision 2** (2026-07-27): no robotic arm, one camera, and a UHF RFID reader
 that identifies rocks in place. The `arm` command was retired at step S.9 and the `tag` frame
-(§4.4) added. The version stayed at **1** — §5 explains why that is not a fudge.
+(§4.4) added, with no version bump.
+
+**Bumped to v2 at step S.14** (2026-08-13), because step 0.2 chose a chassis this protocol did
+not describe: **one drive motor and one steering motor**, not two independently driven sides.
+`drive` is now throttle plus steering, `l` and `r` are retired, and §5.1 works through message
+by message why that one *is* breaking where Revision 2's changes were not.
 
 **This document is the contract.** The console and the firmware are built against it
 independently. When code and document disagree, the code is wrong and gets fixed — the
 exception is a deliberate protocol change, which is a change to this file first, with the
 version number bumped, and then to both codebases.
 
-**Protocol version: `1`.** Nothing in this file has shipped to hardware; no hardware has been
-procured. Section 9 states exactly which parts are implemented today and which are specified
+**Protocol version: `2`.** Nothing in this file has shipped to hardware; no hardware has been
+procured. Section 8 states exactly which parts are implemented today and which are specified
 for a later step.
 
 ---
@@ -73,14 +78,19 @@ These rules apply to every message in both directions.
 1. **Discriminator.** Console → rover frames carry a `cmd` string. Rover → console frames
    carry a `t` string. A frame missing its discriminator is malformed.
 2. **Unknown discriminators are ignored, not errors.** A receiver logs and drops a `cmd` or
-   `t` it does not recognise, and carries on. This is what lets the firmware accept `mast` and
-   `mast` today while ignoring it, let the `arm` command be retired in Revision 2 without a
-   version bump, and lets a newer console talk to an older rover without the link collapsing.
+   `t` it does not recognise, and carries on. This is what lets the firmware accept `mast`
+   today while ignoring it, let the `arm` command be retired in Revision 2 without a version
+   bump, and lets a newer console talk to an older rover without the link collapsing.
 3. **Unknown fields are ignored.** Additive fields are therefore backward compatible and do
    **not** require a version bump.
-4. **Missing fields take the documented default.** A `drive` frame with no `r` means
-   `r = 0.0`. There is no partial application: a frame either parses or is dropped whole.
-5. **Wrong types are a malformed frame**, dropped and counted — not coerced. `{"l":"0.6"}` is
+   - **§2.3a — retired fields are not unknown fields.** A field this document lists as
+     *retired* — today only `l` and `r` on `drive` (§3.2) — makes the frame **malformed**,
+     dropped whole. It is not ignored. A retired field is one whose meaning was removed, and a
+     peer still sending it is a peer that believes something false about this rover; silently
+     ignoring it is precisely how a version skew becomes invisible. See §5.1.
+4. **Missing fields take the documented default.** A `drive` frame with no `steer` means
+   `steer = 0.0`. There is no partial application: a frame either parses or is dropped whole.
+5. **Wrong types are a malformed frame**, dropped and counted — not coerced. `{"fwd":"0.6"}` is
    not `0.6`.
 6. **A malformed frame does not refresh the failsafe timer** (§5). Garbage is not proof of a
    healthy console.
@@ -107,34 +117,74 @@ Sent as the **first frame** after the socket opens, before any other command.
 
 Version negotiation and the behaviour on mismatch are in §4.
 
-### 3.2 `drive` — per-side throttle
+### 3.2 `drive` — throttle and steering
 
-The drive pad. Differential (skid) steering: the left/right difference *is* the turn, so
-there is no steering command.
+The drive pad. The rover has **one driven axle and one steered axle** (step 0.2), so a drive
+command is a speed and a direction, not two side speeds.
 
 ```json
-{"cmd":"drive","l":0.6,"r":-0.6}
+{"cmd":"drive","fwd":0.6,"steer":-1.0}
 ```
 
 | Field | Type | Unit | Range | Default | Meaning |
 |---|---|---|---|---|---|
 | `cmd` | string | — | `"drive"` | — | Discriminator |
-| `l` | number | fraction | −1.0 … 1.0 | `0.0` | Left-side throttle |
-| `r` | number | fraction | −1.0 … 1.0 | `0.0` | Right-side throttle |
+| `fwd` | number | fraction | −1.0 … 1.0 | `0.0` | Throttle. Positive = forward, negative = reverse |
+| `steer` | number | fraction | −1.0 … 1.0 | `0.0` | Steering demand. **Negative = left**, positive = right, `0.0` = straight ahead |
+| ~~`l`~~ | — | — | — | — | **Retired at v2.** Present ⇒ malformed frame (§2.3a) |
+| ~~`r`~~ | — | — | — | — | **Retired at v2.** Present ⇒ malformed frame (§2.3a) |
 
-- **Sign:** positive drives that side **forward**. Both positive = forward; both negative =
-  reverse; opposite signs = turn in place. Per-side physical polarity is corrected in
-  firmware config (step 1.4), never by flipping the sign here.
-- **Out-of-range values are clamped, not rejected.** `l: 2.5` is applied as `1.0`. The console
-  clamps before sending and the rover clamps again on receipt; both are required.
-- **Deadband.** A commanded magnitude below **0.05** coasts that side (both H-bridge direction
-  pins low, zero duty) rather than energising the motors, because the geared motors buzz
-  instead of turning down there. So `l: 0.03` and `l: 0.0` are indistinguishable at the
-  wheels. The exact figure is retuned against real motors in step 1.3 and is a property of
-  the `Drive` module, not of this protocol.
+- **The two axes are independent.** `fwd` sets how fast, `steer` sets which way; either may be
+  zero. Physical polarity of either motor is corrected in firmware config (step 1.4), never by
+  flipping a sign here.
+- **Out-of-range values are clamped, not rejected.** `fwd: 2.5` is applied as `1.0`. The
+  console clamps before sending and the rover clamps again on receipt; both are required.
+- **`steer` with `fwd: 0` moves the wheels, not the rover.** A steered chassis cannot pivot in
+  place: with no throttle the steering motor swings the front axle and the rover stays exactly
+  where it is. This is a real behaviour change from v1, where opposite-signed `l`/`r` turned
+  the rover on the spot, and the console must not present steering as if it were a turn
+  command (§6.4).
+- **Throttle deadband.** A commanded `fwd` magnitude below **0.05** coasts the drive motor
+  (both direction pins low, zero duty) rather than energising it, because the geared motor
+  buzzes instead of turning down there. So `fwd: 0.03` and `fwd: 0.0` are indistinguishable at
+  the wheels. The figure is retuned against the real motor in step 1.3 and is a property of the
+  `Drive` module, not of this protocol.
 - **Resolution.** The console quantises to 0.01. The PWM stage is 8-bit, so the rover's usable
-  resolution is 1/255 — finer values on the wire are harmless but meaningless.
+  throttle resolution is 1/255 — finer values on the wire are harmless but meaningless.
 - **Repeat rate:** a held drive command **must be resent** — see §6. This is not optional.
+
+#### 3.2.1 `steer` is a float, but this build's steering is three-position
+
+Confirmed at step 0.2 ([chassis-envelope §8.5](chassis-envelope.md)): the steering motor drives
+to a **mechanical end stop**, and a spring recentres it when unpowered. There is no
+intermediate angle — the front axle is at full left lock, straight, or full right lock.
+
+`steer` stays a **float on the wire anyway**, and the *rover* does the rounding:
+
+| Received `steer` | This build does |
+|---|---|
+| `steer` ≤ −0.5 | Full left lock |
+| −0.5 < `steer` < 0.5 | Unpowered — the spring centres the axle |
+| `steer` ≥ 0.5 | Full right lock |
+
+The **0.5 threshold is a property of the `Drive` module**, like the throttle deadband, not of
+this protocol; it is stated here so the console's behaviour is predictable, and it is retuned
+at step 1.3 if the real steering proves to need it.
+
+Keeping the field continuous is deliberate. A later chassis with proportional steering honours
+the same field with no version bump, and a console written today needs no change to drive it —
+it simply gets a smoother response to values it was already sending. Which kind of steering a
+build has is **discovered in the handshake, not assumed**: see the `steer3` / `steerprop`
+capability in §4.1. That is the same mechanism §5.2 credits for letting Revision 2 through
+without a flag day, used a second time.
+
+Two consequences the console has to respect, both from
+[chassis-envelope §8.5](chassis-envelope.md):
+
+- **There is no small heading correction.** The only correction available is a full-lock turn
+  the other way, so driving straight is a series of taps rather than a held input. The S.13
+  nudge primitive matters more here, not less.
+- **Failing safe centres the steering** — see §6.1.
 
 ### 3.3 `stop` — explicit stop
 
@@ -146,10 +196,12 @@ there is no steering command.
 |---|---|---|---|---|
 | `cmd` | string | `"stop"` | yes | Discriminator |
 
-Cuts drive current and puts the H-bridge into standby immediately. Takes no arguments and is
-always valid, including while in safe mode.
+Cuts current to **both** motors immediately — direction pins low and zero duty on both
+enables, which on an L293D is the only standby there is (the chip has no separate standby pin;
+its channel-enable pins *are* the PWM pins). The steering therefore spring-centres, per §6.1.
+Takes no arguments and is always valid, including while in safe mode.
 
-`stop` and `drive` with `l: 0, r: 0` both halt the rover, and differ in intent:
+`stop` and `drive` with `fwd: 0, steer: 0` both halt the rover, and differ in intent:
 
 - `drive 0,0` means *"commanded speed is now zero"* — a normal drive command that refreshes
   the failsafe timer and leaves the rover armed. This is what a drive button's release sends.
@@ -211,7 +263,7 @@ before integration rather than after.
 Sent once, in response to the console's `hello`.
 
 ```json
-{"t":"hello","v":1,"fw":"0.1.0","caps":["drive"]}
+{"t":"hello","v":2,"fw":"0.2.0","caps":["drive","steer3"]}
 ```
 
 | Field | Type | Range | Required | Meaning |
@@ -219,13 +271,27 @@ Sent once, in response to the console's `hello`.
 | `t` | string | `"hello"` | yes | Discriminator |
 | `v` | integer | ≥ 1 | yes | Protocol version the rover speaks |
 | `fw` | string | ≤ 16 chars | yes | Firmware version, for the record in a mission log |
-| `caps` | array of string | subset of `["drive","mast","rfid"]` | yes | Subsystems this build actually has |
+| `caps` | array of string | subset of the table below | yes | Subsystems and behaviours this build actually has |
+
+| Token | Meaning |
+|---|---|
+| `drive` | The rover has a drivetrain and will act on `fwd` |
+| `steer3` | **Three-position steering**: `steer` is thresholded to left / centre / right (§3.2.1) |
+| `steerprop` | **Proportional steering**: `steer` is honoured continuously |
+| `mast` | Pan/tilt head fitted and actuated (step 3.4) |
+| `rfid` | RFID reader fitted and polled (step 2.6) |
 
 `caps` is how the console knows what is real on this build. During Phases S–1 it is
-`["drive"]`; `rfid` appears when Phase 2 fits the reader and `mast` when Phase 3 fits the
-servos. The console **must** disable controls for absent capabilities rather than sending
+`["drive","steer3"]`; `rfid` appears when Phase 2 fits the reader and `mast` when Phase 3 fits
+the servos. The console **must** disable controls for absent capabilities rather than sending
 commands into a void — this is what makes the Scene 1 readiness row (step S.6) honest instead
 of decorative.
+
+**Exactly one steering token accompanies `drive`.** `steer3` and `steerprop` are mutually
+exclusive, and a `caps` carrying `drive` with neither of them — or with both — is a rover
+misreporting itself; the console treats that as it treats a version mismatch, and does not
+arm. This is what lets §3.2.1 keep `steer` continuous on the wire without the console having to
+guess what the far end will do with a value of 0.3.
 
 ### 4.2 `tlm` — telemetry
 
@@ -348,13 +414,40 @@ If 3.3 misses this, the fallbacks in priority order are: reduce video bitrate �
 
 ## 5. Versioning
 
-- The current version is **`1`**, and it is a single integer. There is no minor version.
+- The current version is **`2`**, and it is a single integer. There is no minor version.
 - **Bump it only for a breaking change**: removing a field, renaming one, changing a unit,
   narrowing a range, or changing the meaning of an existing value. *Adding* a message type or
   an optional field is backward compatible and does not bump it (§2.2, §2.3).
 - Both sides compare the `v` they receive against the single version they themselves speak.
 
-### Why Revision 2 did not bump the version
+### 5.1 Why the steered chassis *did* bump the version
+
+Step 0.2 chose a chassis with one drive motor and one steering motor. The same message-by-
+message check that let Revision 2 through at v1 gives the opposite answer here:
+
+| Change | Breaking? | Why |
+|---|---|---|
+| `l` / `r` removed from `drive` | **Yes** | Removing a field is breaking by the rule above. Worse, it breaks *quietly*: §2.4 makes missing fields default, so a v1 console's `{"cmd":"drive","l":0.6,"r":0.6}` would have parsed at a v2 rover as `fwd: 0, steer: 0` — a perfectly valid frame that refreshes the failsafe, keeps the rover armed, and moves nothing. The operator holds FORWARD and watches a healthy link do nothing. |
+| `fwd` / `steer` added to `drive` | No, on its own | Additive fields alone would not bump it (§2.3) — it is the retirement above that does. |
+| Meaning of a turn changed | **Yes** | v1 turned by opposing the two sides, and could pivot in place. v2 cannot: `steer` without `fwd` moves no part of the rover across the ground (§3.2). That is a changed meaning, not a changed field. |
+| `caps` gains `steer3` / `steerprop` | No | The *shape* is unchanged — still an array of strings, still ignorable by a console that has not heard of a token. This is the part that did not need the bump, and is why a future proportional-steering rover will not need another one. |
+| `stop`, `mast`, `ping`, `hello`, `tlm`, `pong`, `tag` | No | Untouched at S.14, field for field. |
+
+**The first row is the whole argument.** A silent failure is exactly what the handshake exists
+to catch, so it must be caught rather than tolerated: this is a case where *refusing* to
+interoperate is the safe behaviour and quietly interoperating is the dangerous one.
+
+Two mechanisms enforce it, deliberately belt-and-braces:
+
+1. **The handshake** (below) — a v1 console gets `mode: "incompatible"`, both version numbers
+   on screen, and no actuation at all. This is the primary defence.
+2. **Retiring `l`/`r` as hard rejections** (§2.3a) rather than letting §2.3 ignore them. A
+   frame carrying them is malformed, so it is dropped *and does not refresh the failsafe*
+   (§2.6) — meaning a console that somehow drives without a correct handshake leaves the rover
+   in safe mode within 500 ms rather than armed and inert. Belt to the handshake's braces, and
+   it costs one check in the parser.
+
+### 5.2 Why Revision 2 did not bump the version
 
 Proposal Revision 2 removed the robotic arm and added RFID sensing, which sounds like a
 breaking change and is not one. Checked message by message at step S.9:
@@ -366,13 +459,21 @@ breaking change and is not one. Checked message by message at step S.9:
 | `rfid` field added to telemetry | No | Additive field; §2.3 says unknown fields are ignored. |
 | `caps` values changed | No | The *shape* is unchanged — still an array of strings. `caps` exists precisely so the set can change without the protocol changing, and a console that has never heard of `rfid` just never enables a control for it. |
 
-So `v` stays **1**. This is worth recording because it is the payoff of two decisions made in
-S.2 that looked like over-engineering at the time: making unknown verbs non-fatal, and putting
-capability discovery in the handshake instead of hard-coding it. A whole mission change went
-through the contract without a flag day.
+So Revision 2 kept `v` at **1**. This is worth recording because it is the payoff of two
+decisions made in S.2 that looked like over-engineering at the time: making unknown verbs
+non-fatal, and putting capability discovery in the handshake instead of hard-coding it. A whole
+mission change went through the contract without a flag day.
 
-What *would* force a bump: renaming `l`/`r`, changing throttle to a percentage, changing the
-failsafe timeout's meaning, or making `id` in §4.4 something other than hex.
+It is also worth keeping next to §5.1, because the two together are the honest picture: the
+mechanism bought Revision 2 for free and did **not** buy the chassis change for free. The line
+between them is that Revision 2 only ever *added* and *removed whole verbs*, while S.14 changed
+what an existing verb's existing fields mean. Note the last line of that older analysis, which
+called this exactly: *"what would force a bump: renaming `l`/`r`…"*. It did.
+
+What *would* force a bump to v3: changing throttle to a percentage, changing the failsafe
+timeout's meaning, or making `id` in §4.4 something other than hex. Notably **not** on that
+list: fitting a chassis with proportional steering, which §3.2.1 and the `caps` tokens already
+accommodate.
 
 **On mismatch — the rover:**
 
@@ -417,11 +518,27 @@ and is the one gate the plan does not negotiate past.
 
 ### 6.1 Safe mode
 
-**Safe mode means: drive current cut, H-bridge in standby, servo commands ignored, `mode`
-reported as `"safe"`.** The mast head is *not* forcibly moved — it holds its last commanded
-angle, because slewing a camera on a pole while the link is degrading helps nobody, and with
-one camera it is the operator's only way of seeing what happened. Safe mode stops the rover;
-it does not reset it.
+**Safe mode means: current cut to both drive and steering motors, servo commands ignored,
+`mode` reported as `"safe"`.** The mast head is *not* forcibly moved — it holds its last
+commanded angle, because slewing a camera on a pole while the link is degrading helps nobody,
+and with one camera it is the operator's only way of seeing what happened. Safe mode stops the
+rover; it does not reset it.
+
+#### Failing safe centres the steering, at no cost
+
+A property of the chosen chassis rather than of this code, and the one piece of good news in
+the 0.2 decision ([chassis-envelope §8.5](chassis-envelope.md)): the steering motor is held
+against its end stop **only while powered**, and a spring recentres the axle when it is not.
+Safe mode cuts that power along with the drive.
+
+**So a rover that fails safe mid-turn coasts straight rather than continuing to arc into the
+glass.** Under v1's skid steer the equivalent failure coasted along the curve it was already
+on; here the geometry unwinds itself for free.
+
+This is written into the contract as a property because things stated in a contract get
+checked. **Confirm it on the bench at step 1.3** — cut power at full lock and watch the axle
+return. A weak or absent spring removes the property silently, and if that is what 1.3 finds,
+this paragraph comes back out rather than being quietly hoped for.
 
 The RFID reader **keeps reading** in safe mode. It actuates nothing and cannot move the rover,
 and a tag read while stopped is still useful information — it may be exactly why the operator
@@ -458,10 +575,16 @@ for exactly that.
 The console holds up its half of the failsafe:
 
 - **Hold-to-drive.** Drive controls act on press and release (`button_down` / `button_up`).
-  Lifting a finger sends a stop. No latching, no toggle, no "set speed" control.
+  Lifting a finger sends a stop. No latching, no toggle, no "set speed" control. This maps onto
+  three-position steering unchanged: hold-LEFT / release-to-centre is the same gesture as
+  hold-FORWARD / release-to-stop.
 - **Repeat while held** — see §6.5.
 - **Disable drive controls whenever the link is not established**, so a frozen console cannot
   look live (step S.6).
+- **Do not present steering as turning.** A steering control pressed at zero throttle moves the
+  wheels and not the rover (§3.2). The pad must not imply otherwise — an operator who presses
+  LEFT expecting a pivot, sees nothing happen, and presses harder is the failure mode here.
+  What it should show instead is step S.15's call.
 
 ### 6.5 Command repeat rate
 
@@ -492,36 +615,55 @@ Scene 1, then a Scene 5 approach into a Scene 6 tag read, with time flowing down
 Telemetry is trimmed to the frames that change something.
 
 ```
-t=0.00  console → rover   {"cmd":"hello","v":1}
-t=0.01  rover → console   {"t":"hello","v":1,"fw":"0.2.0","caps":["drive","rfid"]}
+t=0.00  console → rover   {"cmd":"hello","v":2}
+t=0.01  rover → console   {"t":"hello","v":2,"fw":"0.2.0","caps":["drive","steer3","rfid"]}
 t=0.01  rover → console   {"t":"tlm","battery_v":12.42,"mode":"safe","rssi":-54,"rfid":"ready"}
-        ...console shows LINK ESTABLISHED, drive + rfid green, mast greyed (not in caps)
+        ...console shows LINK ESTABLISHED, drive + rfid green, mast greyed (not in caps);
+           steer3 tells it the steering is three-position, so it labels the pad accordingly
 
         ...operator presses and holds FORWARD — Scene 5, closing on a rock
-t=1.20  console → rover   {"cmd":"drive","l":0.4,"r":0.4}     ← arms the rover
-t=1.35  console → rover   {"cmd":"drive","l":0.4,"r":0.4}     ← §6.5 repeat
+t=1.20  console → rover   {"cmd":"drive","fwd":0.4,"steer":0}   ← arms the rover
+t=1.35  console → rover   {"cmd":"drive","fwd":0.4,"steer":0}   ← §6.5 repeat
 t=1.50  rover → console   {"t":"tlm","battery_v":11.88,"mode":"drive","rssi":-56,"rfid":"ready"}
-t=1.50  console → rover   {"cmd":"drive","l":0.4,"r":0.4}
+t=1.50  console → rover   {"cmd":"drive","fwd":0.4,"steer":0}
+
+        ...drifting right of the rock; operator taps LEFT while still holding FORWARD
+t=1.55  console → rover   {"cmd":"drive","fwd":0.4,"steer":-1}  ← full left lock (§3.2.1)
+t=1.65  console → rover   {"cmd":"drive","fwd":0.4,"steer":0}   ← released; spring centres
 
         ...the antenna comes into range — Scene 6
-t=1.61  rover → console   {"t":"tag","id":"E2801160600002","rssi":-71,"ts":1610}
-t=1.65  console → rover   {"cmd":"drive","l":0.4,"r":0.4}
 t=1.71  rover → console   {"t":"tag","id":"E2801160600002","rssi":-63,"ts":1710}
+t=1.80  console → rover   {"cmd":"drive","fwd":0.4,"steer":0}
 t=1.81  rover → console   {"t":"tag","id":"E2801160600002","rssi":-52,"ts":1810}
         ...signal meter climbing; reads rate-limited to 10 Hz (§4.4)
 
         ...operator lifts off with the rock in range
-t=1.86  console → rover   {"cmd":"drive","l":0.0,"r":0.0}     ← still armed, speed zero
+t=1.86  console → rover   {"cmd":"drive","fwd":0.0,"steer":0}   ← still armed, speed zero
 t=1.91  rover → console   {"t":"tag","id":"E2801160600002","rssi":-47,"ts":1910}
 t=2.00  rover → console   {"t":"tlm","battery_v":12.30,"mode":"drive","rssi":-56,"rfid":"scanning"}
         ...console: TAG DETECTED, composition looked up locally — Scene 7
 
         ...console goes quiet — crash, or Wi-Fi drops
-t=2.36  rover: 500 ms since last command → safe mode, drive current cut
+t=2.36  rover: 500 ms since last command → safe mode, both motors cut
 t=2.50  rover → console   {"t":"tlm","battery_v":12.40,"mode":"safe","rssi":-71,"rfid":"scanning"}
-        ...note the reader keeps reading in safe mode (§6.1) — it actuates nothing
+        ...steering unpowered, so the axle spring-centres and the coast is straight (§6.1);
+           the reader keeps reading — it actuates nothing
 
         ...link recovers. The rover does NOT resume driving (§6.3).
+```
+
+And the failure §5.1 exists to prevent, with a v1 console left in service:
+
+```
+t=0.00  console → rover   {"cmd":"hello","v":1}
+t=0.01  rover → console   {"t":"hello","v":2,"fw":"0.2.0","caps":["drive","steer3"]}
+t=0.01  rover → console   {"t":"tlm","battery_v":12.42,"mode":"incompatible","rssi":-54,"rfid":"absent"}
+        ...console: "ROVER v2, CONSOLE v1", drive pad disabled. It never gets to send a frame.
+
+        ...had the handshake not caught it, §2.3a still would:
+        console → rover   {"cmd":"drive","l":0.6,"r":0.6}
+        rover: retired field `l` → malformed, dropped, failsafe timer NOT refreshed (§2.6)
+        rover: 500 ms later → safe mode. Visibly stopped, rather than armed and inert.
 ```
 
 ---
@@ -538,8 +680,11 @@ what writing it three times is for.
 
 | Message | Firmware | Console | Simulator | Notes |
 |---|---|---|---|---|
-| `drive` | ✅ | ✅ | ✅ | Shapes verified identical against this doc |
-| `stop` | ✅ | ✅ | ✅ | F2 closed in S.6 — `send_stop()`, wired to the STOP button |
+| `drive` (v2: `fwd`/`steer`) | ✅ S.14 | ✅ S.15 | ✅ S.15 | All three back in step at v2 |
+| Retired `l`/`r` rejection (§2.3a) | ✅ S.14 | n/a — sender | ✅ S.15 | The simulator mirrors the firmware's strict parsing, so it owes this check too |
+| `caps` steering token (§4.1) | ✅ reports `steer3` | ✅ refuses to arm without exactly one | ✅ advertises, and can be told to omit it | Drop it with `--caps drive` to check the console still refuses |
+| Steering ⇒ no pivot (§3.2) | n/a — `Drive` just actuates | ✅ pad says so when steering with no throttle | ✅ bicycle model; `w ∝ v`, so a stationary rover cannot turn | The behaviour S.15 exists to make true everywhere |
+| `stop` | ✅ | ✅ | ✅ | F2 closed in S.6 — `send_stop()`, wired to the STOP button. Unchanged by S.14 |
 | `mast` | ⚠️ accepted, ignored | ✅ sender exists | ⚠️ accepted, ignored | Actuated in step 3.4 |
 | ~~`arm`~~ | **removed** | **removed** | **removed** | Retired in S.9 with the manipulator. No version bump needed — see §5. |
 | `hello` | ✅ | ✅ | ✅ | Console sends it on connect and retries every 1 s until answered; rover replies with `caps` and refuses to arm on a mismatch |
@@ -595,6 +740,9 @@ Deliberately unresolved, each with the step that closes it.
 | 1 | `mast` pan/tilt ranges are placeholders | Step 3.4 — measured mechanical limits |
 | ~~2~~ | ~~Arm joint count and per-joint ranges~~ — **moot; the arm was removed in Revision 2** | Closed |
 | ~~3~~ | ~~Round-trip latency target~~ — **agreed at S.7: p95 ≤ 100 ms, ceiling 250 ms (§4.5)** | Closed |
+| 8 | **The steering hold duty.** Three-position steering means the motor sits against a mechanical end stop for as long as the operator holds a turn — a continuous stall. `Drive` therefore holds it at a reduced duty rather than full, which is a guess until the stall current is on a meter against the L293D's 600 mA channel rating | Steps 1.3, 1.7 |
+| 9 | **Whether the steering spring-centres strongly enough** to make the §6.1 failsafe property real | Step 1.3 |
+| 10 | Whether the §3.2.1 threshold of 0.5 is the right place to round, once there is a real steering linkage to feel | Step 1.3 |
 | 4 | Whether the mission/session state of Phase 4 rides this socket or stays console-only | Step 4.2 |
 | 5 | Bluetooth fallback framing, if Wi-Fi proves inadequate | Step 3.3 decision point |
 | 6 | **Tag `id` length and format** as the chosen reader actually reports it — §4.4 says 4–64 uppercase hex, which is a guess until a reader exists | Steps 0.1, 2.1 |
@@ -602,4 +750,5 @@ Deliberately unresolved, each with the step that closes it.
 
 ---
 
-*Protocol v1 · frozen at S.2 · retargeted to proposal Revision 2 at S.9 · no hardware procured*
+*Protocol v2 · frozen at S.2 · retargeted to proposal Revision 2 at S.9 · retargeted to the
+steered chassis at S.14 · no hardware procured*
