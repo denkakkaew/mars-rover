@@ -213,6 +213,26 @@ void setup() {
   g_drive.begin();
 
   WiFi.mode(WIFI_STA);
+
+  // Wi-Fi modem sleep off — measured at step 1.2, and the single largest latency win
+  // available to this project. Associated STA mode defaults to WIFI_PS_MIN_MODEM, which
+  // parks the radio between AP beacons; a control frame arriving mid-doze waits for the
+  // next DTIM. Measured on real hardware, 80 probes each:
+  //
+  //     power save on   min  7.1   median 43.9   p95  99.3   max 125.1 ms
+  //     power save off  min  8.2   median 12.1   p95  19.8   max  36.4 ms
+  //
+  // p95 sits *at* the 100 ms R1 target with it on and at a fifth of it with it off
+  // (docs/protocol.md 4.5). The minimum barely moves, which is what identifies the
+  // cause: the link was always fast, the radio was asleep.
+  //
+  // The cost is current — the radio no longer dozes. docs/power-budget.md already
+  // budgets the ESP32 at 120 mA on that basis, so this is priced in rather than a
+  // surprise for step 1.7. Do not re-enable power save to save battery without
+  // re-measuring latency: R1 is the risk this project is most exposed to, and the
+  // headroom bought here is what step 3.3 spends on video contention.
+  WiFi.setSleep(false);
+
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   while (WiFi.status() != WL_CONNECTED) {
     delay(250);
