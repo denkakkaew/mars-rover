@@ -5,27 +5,41 @@
 // Pin numbers are still placeholders until the Phase 1 wiring is fixed (step 1.3) — S.14
 // renamed them to match the chassis chosen at 0.2, it did not measure them.
 
-// ---- Drive: L293D dual H-bridge, one drive motor and one steering motor ----
-// The chassis chosen at step 0.2 is steered, not skid-steer: channel 1 drives the rear
-// axle, channel 2 swings the front axle to a mechanical end stop (docs/protocol.md 3.2.1).
+// ---- Drive: DRV8833 dual H-bridge, one drive motor and one steering motor ----
+// The chassis chosen at step 0.2 is steered, not skid-steer: bridge A drives the rear
+// axle, bridge B swings the front axle to a mechanical end stop (docs/protocol.md 3.2.1).
 //
-// L293D pin naming, since it differs from the TB6612FNG this was first written for:
-// each channel pair has IN1/IN2 for direction and its own EN pin, and the EN pin is what
-// carries the PWM. **There is no standby pin** — zero duty on both enables is standby, so
-// the PIN_MOTOR_STANDBY that used to live here is gone rather than reassigned.
-// Confirm against the kit's actual driver board at step 1.3: if it breaks out an extra
-// enable of its own, it comes back.
-constexpr uint8_t PIN_DRIVE_IN1 = 26;
-constexpr uint8_t PIN_DRIVE_IN2 = 27;
-constexpr uint8_t PIN_DRIVE_EN = 14;
-constexpr uint8_t PIN_STEER_IN1 = 25;
-constexpr uint8_t PIN_STEER_IN2 = 33;
-constexpr uint8_t PIN_STEER_EN = 32;
+// **Driver changed from L293D to DRV8833 at step 1.3**, after the L293D left only ~2.9 V
+// at the motor from a 4.8 V pack. Wired and jumper-tested on the bench 2026-08-13.
+//
+// The DRV8833 has NO enable pin: each bridge takes two inputs and the PWM goes on
+// whichever one matches the commanded direction (see lib/Drive/Drive.h). So every input
+// needs its own LEDC channel — four here, where the L293D needed two.
+//
+// Module silkscreen, confirmed on the actual board:
+//   VM · NC · GND · AO1 · AO2 · BO2 · BO1 · BIN1 · BIN2 · AIN1 · AIN2 · STBY
+// Note BO2 is printed before BO1 — reversed relative to the A side, so if the steering
+// runs backwards, that is a sign flip to fix at step 1.4, not a wiring error.
+constexpr uint8_t PIN_DRIVE_IN1 = 26;  // -> AIN1
+constexpr uint8_t PIN_DRIVE_IN2 = 27;  // -> AIN2
+constexpr uint8_t PIN_STEER_IN1 = 25;  // -> BIN1
+constexpr uint8_t PIN_STEER_IN2 = 33;  // -> BIN2
 
-// LEDC hardware-PWM channels reserved for the two motors.
-// The mast servos get their own channels in Phase 3 — do not reuse these.
-constexpr uint8_t LEDC_CHANNEL_DRIVE = 0;
-constexpr uint8_t LEDC_CHANNEL_STEER = 1;
+// STBY must be HIGH for the driver to do anything; this module breaks it out with no
+// pull-up. Driving it from a GPIO rather than tying it to 3V3 is what makes `stop()` a
+// hardware disable of both bridges instead of just a zero duty cycle.
+constexpr uint8_t PIN_MOTOR_STANDBY = 14;
+
+// LEDC hardware-PWM channels — only the drive bridge needs them.
+//
+// The steering bridge is switched flat on/off with plain digital outputs and claims no
+// LEDC channel at all: it is three-position, so there is no speed to modulate. Measured
+// at step 1.3 — a PWM-limited steering channel could not shift the axle against its
+// return spring, and full voltage is the fix rather than a higher duty cycle.
+//
+// So channels 2 upward are free for the Phase 3 mast servos.
+constexpr uint8_t LEDC_CHANNEL_DRIVE_IN1 = 0;
+constexpr uint8_t LEDC_CHANNEL_DRIVE_IN2 = 1;
 
 // ---- Power monitoring ----
 // LiPo pack through a resistor divider into an ADC pin.

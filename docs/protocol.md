@@ -196,10 +196,14 @@ Two consequences the console has to respect, both from
 |---|---|---|---|---|
 | `cmd` | string | `"stop"` | yes | Discriminator |
 
-Cuts current to **both** motors immediately — direction pins low and zero duty on both
-enables, which on an L293D is the only standby there is (the chip has no separate standby pin;
-its channel-enable pins *are* the PWM pins). The steering therefore spring-centres, per §6.1.
-Takes no arguments and is always valid, including while in safe mode.
+Cuts current to **both** motors immediately: both bridge inputs to zero so the outputs coast,
+then the driver's **standby pin dropped**, which is a hardware disable of both bridges rather
+than merely a zero duty cycle. The steering therefore spring-centres, per §6.1. Takes no
+arguments and is always valid, including while in safe mode.
+
+*Step 1.3 changed the driver from an L293D to a DRV8833, which is where that standby pin came
+from — the L293D had none, and `stop()` could only ask for zero duty. A stop is now
+strictly stronger than it was when this section was written at S.14.*
 
 `stop` and `drive` with `fwd: 0, steer: 0` both halt the rover, and differ in intent:
 

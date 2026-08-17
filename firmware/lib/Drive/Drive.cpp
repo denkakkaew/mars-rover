@@ -1,16 +1,13 @@
 #include "Drive.h"
 
 namespace {
-// 1.5 kHz, down from the 20 kHz this used under the TB6612FNG assumption.
+// 20 kHz — above the audible band, where this started before step 0.2 chose an L293D.
 //
-// An L293D is a bipolar Darlington part and cannot switch cleanly at 20 kHz: most of the
-// duty cycle would be spent in the transition, wasted as heat, and what it costs is
-// low-speed torque — exactly the region the S.13 throttle floor lives in
-// (docs/chassis-envelope.md 8.4). A few kHz is the usual guidance for this part.
-//
-// The deliberate price: this is inside the audible band, so **the motors will whine**.
-// That is a trade made knowingly, not a defect to be reported at step 1.3.
-constexpr uint32_t kPwmFrequencyHz = 1500;
+// S.14 dropped it to 1.5 kHz because an L293D is a bipolar Darlington part that cannot
+// switch cleanly any faster, and accepted an audible whine as the price. The DRV8833 is a
+// MOSFET bridge rated well beyond this, so both halves of that trade are refunded: the
+// whine goes, and low-speed torque improves rather than suffers.
+constexpr uint32_t kPwmFrequencyHz = 20000;
 constexpr uint8_t kPwmResolutionBits = 8;
 constexpr uint32_t kPwmMaxDuty = (1u << kPwmResolutionBits) - 1;
 
@@ -21,80 +18,87 @@ constexpr float kThrottleDeadband = 0.05f;
 // Where a continuous `steer` demand rounds onto this chassis's three positions
 // (docs/protocol.md 3.2.1). Stated in the contract so console behaviour is predictable.
 constexpr float kSteerThreshold = 0.5f;
-
-// Steering is three-position, so a held turn parks the motor against a mechanical end stop
-// for as long as the operator holds it — a continuous stall, not a transient one. Holding
-// below full duty limits that stall current, which matters because the L293D is rated
-// 600 mA per channel and a stalled motor is the case most likely to exceed it
-// (docs/chassis-envelope.md 8.3).
-//
-// This figure is a guess with no hardware to check it against: too low and the axle will
-// not reach full lock, too high and the driver cooks. Step 1.3 finds the lowest value that
-// still reaches the stop, and 1.7 puts the resulting current on a meter
-// (docs/protocol.md 9, open item 8).
-constexpr float kSteerHoldDuty = 0.7f;
 }  // namespace
 
-Drive::Drive(const MotorPins &drive_motor, const MotorPins &steer_motor)
-    : drive_(drive_motor), steer_(steer_motor) {}
+Drive::Drive(const PwmMotor &drive_motor, const SwitchedMotor &steer_motor,
+             uint8_t standby_pin)
+    : drive_(drive_motor), steer_(steer_motor), standby_pin_(standby_pin) {}
 
 void Drive::begin() {
-  for (const MotorPins *motor : {&drive_, &steer_}) {
-    pinMode(motor->in1, OUTPUT);
-    pinMode(motor->in2, OUTPUT);
-    ledcSetup(motor->channel, kPwmFrequencyHz, kPwmResolutionBits);
-    ledcAttachPin(motor->enable, motor->channel);
-  }
+  ledcSetup(drive_.channel1, kPwmFrequencyHz, kPwmResolutionBits);
+  ledcAttachPin(drive_.in1, drive_.channel1);
+  ledcSetup(drive_.channel2, kPwmFrequencyHz, kPwmResolutionBits);
+  ledcAttachPin(drive_.in2, drive_.channel2);
+
+  // Plain outputs, no LEDC. The steering has no speed to modulate.
+  pinMode(steer_.in1, OUTPUT);
+  pinMode(steer_.in2, OUTPUT);
+
+  pinMode(standby_pin_, OUTPUT);
   stop();
 }
 
 void Drive::setDrive(float throttle, float steer) {
+  digitalWrite(standby_pin_, HIGH);
   applyThrottle(throttle);
   applySteer(steer);
 }
 
 void Drive::stop() {
-  // Zero duty on both enables is the whole of standby on an L293D. Cutting the steering
-  // motor along with the drive is not incidental: it is what lets the spring recentre the
-  // axle, so a rover that stops mid-turn coasts straight (docs/protocol.md 6.1).
-  applyMotor(drive_, true, 0.0f);
-  applyMotor(steer_, true, 0.0f);
+  // Outputs to coast first, then disable the driver — not the other way round, so there
+  // is no instant where the bridges are still energised with the chip on its way down.
+  applyThrottle(0.0f);
+  applySteer(0.0f);
+  digitalWrite(standby_pin_, LOW);
 }
 
 void Drive::applyThrottle(float throttle) {
   throttle = constrain(throttle, -1.0f, 1.0f);
   const float magnitude = fabsf(throttle);
+  const uint32_t level =
+      (magnitude < kThrottleDeadband) ? 0u
+                                      : static_cast<uint32_t>(magnitude * kPwmMaxDuty);
 
-  if (magnitude < kThrottleDeadband) {
-    applyMotor(drive_, true, 0.0f);
+  if (level == 0) {
+    // Both inputs low = coast. Deliberately not brake (both high): the rover is meant to
+    // roll to a stop, and step 1.6 measures that coast distance as a safety figure.
+    ledcWrite(drive_.channel1, 0);
+    ledcWrite(drive_.channel2, 0);
     return;
   }
-  applyMotor(drive_, throttle > 0.0f, magnitude);
+
+  // PWM on the input matching the direction, the other held low. The idle input must be
+  // rewritten every time, not just once — it is the *previous* direction's PWM pin, and
+  // leaving it running would brake or reverse instead of driving.
+  if (throttle > 0.0f) {
+    ledcWrite(drive_.channel1, level);
+    ledcWrite(drive_.channel2, 0);
+  } else {
+    ledcWrite(drive_.channel1, 0);
+    ledcWrite(drive_.channel2, level);
+  }
 }
 
 void Drive::applySteer(float steer) {
   steer = constrain(steer, -1.0f, 1.0f);
 
-  // Three positions, not a proportional angle: the demand picks a direction, and the motor
-  // runs into its end stop. Inside the centre band it is left unpowered rather than driven
-  // to centre, because the spring does that job better than the motor can.
+  // Three positions, and full voltage for the two that are not centre. There is no duty
+  // cycle to pick: the motor drives the axle into a mechanical end stop and stays there
+  // while the operator holds the turn.
+  //
+  // A held turn is therefore a continuous stall. That is tolerable here in a way it was
+  // not on the L293D — the DRV8833 carries 1.2 A per channel against 600 mA and has
+  // overcurrent and thermal protection of its own — but it is still the current figure to
+  // watch at step 1.7. If it proves too high, the fix is a series resistor or a
+  // deliberately measured duty cycle, not the guess that used to live here.
   if (fabsf(steer) < kSteerThreshold) {
-    applyMotor(steer_, true, 0.0f);
-    return;
-  }
-  applyMotor(steer_, steer > 0.0f, kSteerHoldDuty);
-}
-
-void Drive::applyMotor(const MotorPins &motor, bool forward, float duty) {
-  if (duty <= 0.0f) {
-    // Both direction pins low = coast, and zero duty removes the channel enable too.
-    digitalWrite(motor.in1, LOW);
-    digitalWrite(motor.in2, LOW);
-    ledcWrite(motor.channel, 0);
+    // Coast, so the return spring centres the axle rather than the motor fighting it.
+    digitalWrite(steer_.in1, LOW);
+    digitalWrite(steer_.in2, LOW);
     return;
   }
 
-  digitalWrite(motor.in1, forward ? HIGH : LOW);
-  digitalWrite(motor.in2, forward ? LOW : HIGH);
-  ledcWrite(motor.channel, static_cast<uint32_t>(duty * kPwmMaxDuty));
+  const bool right = steer > 0.0f;
+  digitalWrite(steer_.in1, right ? HIGH : LOW);
+  digitalWrite(steer_.in2, right ? LOW : HIGH);
 }
