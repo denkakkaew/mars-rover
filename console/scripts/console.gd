@@ -110,7 +110,26 @@ const NUDGE_VECTORS := {
 ## Which pad buttons are currently held, name -> vector. Held rather than derived from
 ## the buttons themselves because a disabled Button never emits button_up, so the link
 ## dropping mid-press would otherwise leave a phantom press in the sum forever.
+##
+## Keys are always plain String, never StringName — touch and keyboard both write here and
+## a mix of the two types would risk two entries for one control, which would double a
+## throttle and leave a release unmatched.
 var _held: Dictionary = {}
+
+## Arrow keys drive the same pad the touchscreen does (step 1.3 bench request). Mapping to
+## button names rather than to vectors is deliberate: keyboard and touch then land in the
+## same `_held` sum, so holding FORWARD on screen while tapping LEFT on the keyboard
+## behaves exactly like holding both on screen.
+const KEY_TO_BUTTON := {
+	KEY_UP: "Forward",
+	KEY_DOWN: "Back",
+	KEY_LEFT: "Left",
+	KEY_RIGHT: "Right",
+}
+
+## A panic key that is bigger than a mouse target and needs no aim. `stop` is honoured by
+## the rover in every state, so this is always safe to hit.
+const KEY_STOP := KEY_SPACE
 
 var _display: Display = Display.DISCONNECTED
 var _rover_mode := ""
@@ -177,12 +196,49 @@ func _ready() -> void:
 
 
 func _on_drive_pressed(name: StringName, vector: Vector2) -> void:
-	_held[name] = vector
+	_held[String(name)] = vector
 	_apply_pad()
 
 
 func _on_drive_released(name: StringName) -> void:
-	_held.erase(name)
+	_held.erase(String(name))
+	_apply_pad()
+
+
+## Keyboard driving. Handled in _input rather than _unhandled_key_input, and marked
+## handled, because Godot's default UI navigation also claims the arrow keys — without
+## that the first press would move focus between pad buttons instead of driving.
+##
+## `echo` events are ignored: the OS auto-repeats a held key, and treating each repeat as
+## a fresh press would re-arm the pad dozens of times a second. The physical hold is
+## already covered — `rover_link.gd` owns the 150 ms command repeat.
+func _input(event: InputEvent) -> void:
+	var key := event as InputEventKey
+	if key == null or key.echo:
+		return
+
+	if key.keycode == KEY_STOP:
+		if key.pressed:
+			_held.clear()
+			_link.send_stop()
+			_refresh_steering_label()
+		get_viewport().set_input_as_handled()
+		return
+
+	if not KEY_TO_BUTTON.has(key.keycode):
+		return
+	get_viewport().set_input_as_handled()
+
+	# Gated on the same condition as the on-screen pad. Without this a keypress while the
+	# link is down would leave an entry in `_held` that springs back to life on reconnect.
+	if not _pad_enabled():
+		return
+
+	var button_name: String = KEY_TO_BUTTON[key.keycode]
+	if key.pressed:
+		_held[button_name] = DRIVE_VECTORS[button_name]
+	else:
+		_held.erase(button_name)
 	_apply_pad()
 
 
@@ -203,6 +259,16 @@ func _apply_pad() -> void:
 		steer += vector.y
 	_link.hold_drive(clampf(throttle, -1.0, 1.0), clampf(steer, -1.0, 1.0))
 	_refresh_steering_label()
+	_highlight_held()
+
+
+## Lights the pad buttons that are currently held. On-screen presses show their own state,
+## but a keyboard press otherwise gives no on-screen confirmation at all — and an operator
+## who cannot tell whether the key registered will press it again.
+func _highlight_held() -> void:
+	for button in _drive_pad.get_children():
+		if button is Button and DRIVE_VECTORS.has(button.name):
+			button.modulate = COLOR_READY if _held.has(String(button.name)) else Color.WHITE
 
 
 func _on_nudge_pressed(vector: Vector2) -> void:
@@ -536,8 +602,15 @@ func _refresh_chips() -> void:
 ## The drive pad is live only when the link genuinely is. Safe mode still allows driving
 ## — a fresh command is precisely what re-arms the rover (docs/protocol.md 4.2) — but a
 ## stale, disconnected, or mismatched link must not leave usable-looking buttons.
+## Whether driving is allowed at all. Safe mode counts as enabled — a fresh command is
+## precisely what re-arms the rover (docs/protocol.md 4.2). Keyboard input is gated on the
+## same predicate as the buttons, so there is one rule rather than two that can drift.
+func _pad_enabled() -> bool:
+	return _display == Display.LINKED or _display == Display.SAFE_MODE
+
+
 func _refresh_drive_pad() -> void:
-	var enabled := _display == Display.LINKED or _display == Display.SAFE_MODE
+	var enabled := _pad_enabled()
 
 	# The whole panel, so the S.13 speed toggle and nudge row go dead with the pad
 	# rather than staying tappable against a rover that is not listening.
@@ -555,3 +628,4 @@ func _refresh_drive_pad() -> void:
 		_held.clear()
 		_link.release_drive()
 	_refresh_steering_label()
+	_highlight_held()

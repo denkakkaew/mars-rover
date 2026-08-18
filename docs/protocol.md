@@ -539,10 +539,13 @@ Safe mode cuts that power along with the drive.
 glass.** Under v1's skid steer the equivalent failure coasted along the curve it was already
 on; here the geometry unwinds itself for free.
 
-This is written into the contract as a property because things stated in a contract get
-checked. **Confirm it on the bench at step 1.3** — cut power at full lock and watch the axle
-return. A weak or absent spring removes the property silently, and if that is what 1.3 finds,
-this paragraph comes back out rather than being quietly hoped for.
+This was written into the contract as a property because things stated in a contract get
+checked — and **step 1.3 checked it on real hardware (2026-08-13): the axle springs back to
+centre on release, confirmed.** The property is real rather than hoped for, so §6.1 stands as
+written and step 1.6 can rely on it when it measures coast distance after a link cut.
+
+Re-check it if the steering linkage is ever rebuilt or the spring replaced. A weak or absent
+spring removes the property silently, and this paragraph would have to come back out.
 
 The RFID reader **keeps reading** in safe mode. It actuates nothing and cannot move the rover,
 and a tag read while stopped is still useful information — it may be exactly why the operator

@@ -817,6 +817,43 @@ two independent grounds.
 
 **Review gate:** video of the bench spin plus the tuned deadband figure. ⛔ Stop for approval.
 
+#### ⏳ 1.3 in progress, 2026-08-13 — first motion achieved
+
+**The driver changed.** The L293D chosen at 0.2 left only ~2.9 V at the motor from the 4.8 V
+pack after its ~2 V bridge drop, and nothing moved usefully. Replaced with a **DRV8833**
+(~0.2 V drop, 1.2 A/channel, 3.3 V logic, no separate logic supply). Same pack now delivers
+~4.6 V to the motor. Module silkscreen:
+`VM · NC · GND · AO1 · AO2 · BO2 · BO1 · BIN1 · BIN2 · AIN1 · AIN2 · STBY`.
+
+| Check | Result |
+|---|---|
+| Drive motor forward / reverse | ✅ both directions, PWM speed control |
+| Steering left / right | ✅ **and `←` steers left — no sign flip needed** |
+| Steering springs back to centre on release | ✅ **§6.1's safety property confirmed on hardware** |
+| Speed tracks command at 25 / 50 / 100 % | ✅ |
+| STOP immediate | ✅ now a hardware standby, not just zero duty |
+| `config.h` at real pins | ✅ |
+| **Deadband figure** | ⏳ **outstanding — the one thing left** |
+
+**Two findings from the bench:**
+
+- **The steering must not be PWM'd.** `kSteerHoldDuty = 0.7` was a guess written to keep a
+  continuous stall inside the L293D's 600 mA channel. It survived the driver change when it
+  should not have, and at 70% duty the steering motor could not shift the axle against its
+  return spring — the drive motor worked and the steering did not. `lib/Drive` now gives the
+  two motors *different types*: `PwmMotor` for the drive bridge, `SwitchedMotor` for steering.
+  Removing the duty parameter entirely means it cannot creep back.
+- **Two L293D-era decisions are refunded.** PWM returns to 20 kHz from the 1.5 kHz forced at
+  S.14, so the deliberate whine is gone and low-speed torque improves. And the DRV8833's
+  standby pin makes `stop()` a hardware disable of both bridges — protocol.md §3.3 updated,
+  since it claimed the driver had none.
+
+**Phase 0 consequences to fold in when 0.3 is decided:** finding **F6** (L293D thermal limit
+on held steering) is largely dissolved by the part change; but `VM` maxes at **10.8 V**, so the
+3S pack 0.3 recommended would destroy this board. The reason for that recommendation also
+evaporates — the 8 V buck existed to overcome a 2 V drop that no longer exists — so **2S direct
+is now the strong candidate.**
+
 ---
 
 ### Step 1.4 — Both motors, direction and polarity calibration
