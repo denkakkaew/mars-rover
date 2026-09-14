@@ -9,7 +9,9 @@ that identifies rocks in place. The `arm` command was retired at step S.9 and th
 (§4.4) added, with no version bump.
 
 **Bumped to v2 at step S.14** (2026-08-13), because step 0.2 chose a chassis this protocol did
-not describe: **one drive motor and one steering motor**, not two independently driven sides.
+not describe: **one throttle and one steering angle**, not two independently driven sides. (The
+rear axle turns out to carry *two* motors rather than one, but they are driven together off a
+single bridge, so the wire format is unaffected — see power-budget F8.)
 `drive` is now throttle plus steering, `l` and `r` are retired, and §5.1 works through message
 by message why that one *is* breaking where Revision 2's changes were not.
 
@@ -426,8 +428,9 @@ If 3.3 misses this, the fallbacks in priority order are: reduce video bitrate �
 
 ### 5.1 Why the steered chassis *did* bump the version
 
-Step 0.2 chose a chassis with one drive motor and one steering motor. The same message-by-
-message check that let Revision 2 through at v1 gives the opposite answer here:
+Step 0.2 chose a steered chassis: one throttle and one steering angle, whatever the motor
+count behind them. The same message-by-message check that let Revision 2 through at v1 gives
+the opposite answer here:
 
 | Change | Breaking? | Why |
 |---|---|---|
@@ -747,9 +750,9 @@ Deliberately unresolved, each with the step that closes it.
 | 1 | `mast` pan/tilt ranges are placeholders | Step 3.4 — measured mechanical limits |
 | ~~2~~ | ~~Arm joint count and per-joint ranges~~ — **moot; the arm was removed in Revision 2** | Closed |
 | ~~3~~ | ~~Round-trip latency target~~ — **agreed at S.7: p95 ≤ 100 ms, ceiling 250 ms (§4.5)** | Closed |
-| 8 | **The steering hold duty.** Three-position steering means the motor sits against a mechanical end stop for as long as the operator holds a turn — a continuous stall. `Drive` therefore holds it at a reduced duty rather than full, which is a guess until the stall current is on a meter against the L293D's 600 mA channel rating | Steps 1.3, 1.7 |
-| 9 | **Whether the steering spring-centres strongly enough** to make the §6.1 failsafe property real | Step 1.3 |
-| 10 | Whether the §3.2.1 threshold of 0.5 is the right place to round, once there is a real steering linkage to feel | Step 1.3 |
+| ~~8~~ | ~~**The steering hold duty.**~~ — **resolved at 1.3, in the opposite direction to the one this row assumed.** `Drive` held the steering at a reduced duty (`kSteerHoldDuty = 0.7`) to keep a continuous stall inside the L293D's 600 mA channel. On the bench that duty could not shift the axle against its return spring at all, so **the steering bridge is now switched flat on with no PWM and no duty parameter**. The stall is therefore at *full* rail voltage, which makes it larger, not smaller — see **F6** in [power-budget.md](power-budget.md) | Closed at 1.3; the current it draws is measured at **1.4** |
+| ~~9~~ | ~~**Whether the steering spring-centres strongly enough** to make the §6.1 failsafe property real~~ — ✅ **confirmed on hardware at step 1.3**: the axle springs back to centre on release | Closed |
+| 10 | Whether the §3.2.1 threshold of 0.5 is the right place to round, once there is a real steering linkage to feel. *1.3 confirmed the sign (`←` steers left) but bench-spun the axle unloaded; the rounding point wants a chassis under it* | Step 1.5 |
 | 4 | Whether the mission/session state of Phase 4 rides this socket or stays console-only | Step 4.2 |
 | 5 | Bluetooth fallback framing, if Wi-Fi proves inadequate | Step 3.3 decision point |
 | 6 | **Tag `id` length and format** as the chosen reader actually reports it — §4.4 says 4–64 uppercase hex, which is a guess until a reader exists | Steps 0.1, 2.1 |
@@ -758,4 +761,4 @@ Deliberately unresolved, each with the step that closes it.
 ---
 
 *Protocol v2 · frozen at S.2 · retargeted to proposal Revision 2 at S.9 · retargeted to the
-steered chassis at S.14 · no hardware procured*
+steered chassis at S.14 · first exercised against real motors at step 1.3, 2026-08-13*
