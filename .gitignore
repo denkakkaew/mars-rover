@@ -19,3 +19,7 @@ $RECYCLE.BIN/
 .vscode/
 .idea/
 *.swp
+
+# Python bytecode cache — build artifact, not a source.
+__pycache__/
+*.py[cod]

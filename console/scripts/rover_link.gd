@@ -28,7 +28,18 @@ enum State {
 }
 
 ## Bumped only for a breaking change (docs/protocol.md 5).
-const PROTOCOL_VERSION := 1
+##
+## v2 (step S.15 on this side, S.14 on the rover's): `drive` carries `fwd`/`steer`
+## instead of `l`/`r`, after step 0.2 chose a steered chassis. A v1 rover and a v2
+## console must NOT interoperate — the old frame parses as a valid zero-throttle command
+## and moves nothing — so the handshake mismatch here is load-bearing, not cosmetic.
+const PROTOCOL_VERSION := 2
+
+## Steering kinds a rover may advertise in `caps` (docs/protocol.md 4.1). Exactly one
+## must accompany `drive`; see _handle_hello() for why a missing one is refused rather
+## than assumed.
+const STEER_THREE_POSITION := "steer3"
+const STEER_PROPORTIONAL := "steerprop"
 
 const RECONNECT_INTERVAL_SEC := 2.0
 
@@ -59,6 +70,55 @@ const PING_TIMEOUT_SEC := 2.0
 ## Samples kept for the percentile: 240 at 4 Hz is a rolling minute.
 const RTT_WINDOW := 240
 
+# --- Fine drive (step S.13, onto the steered model at S.15) --------------------------
+#
+# Everything here shapes the `fwd` number the console sends. `steer` is deliberately
+# NOT shaped: the rover thresholds it to full lock or centre anyway (docs/protocol.md
+# 3.2.1), so curving it or lifting it off a floor would be shaping a value that gets
+# rounded away. Steering demand goes on the wire as the operator meant it.
+
+## How hard the pad drives. TRANSIT crosses the arena; PRECISION is for lining up on a
+## rock in Scenes 4-5, where a full-throttle tap overshoots.
+enum Speed { TRANSIT, PRECISION }
+
+## The operator's intent, before shaping. Not the throttle that goes on the wire.
+const SPEED_SCALE := {
+	Speed.TRANSIT: 1.0,
+	Speed.PRECISION: 0.35,
+}
+
+## Below this the rover does not reliably break out of its own ruts on sand — it buzzes
+## and stays put, which reads to the operator as a dead control rather than a slow one.
+## So the shaped output is either zero or at least this: there is no useful throttle in
+## between.
+##
+## This is NOT the firmware's deadband (kThrottleDeadband, 0.05), which is the H-bridge
+## coasting. This is the ground.
+##
+## **Raised from 0.32 to 0.45 at step S.15**, and not because the sand changed. The old
+## figure came from the S.12 model's sand breakaway of 0.28 plus margin, which assumed a
+## MOSFET bridge. The chosen L293D drops ~1.8-2 V against that part's ~0.5 V, so on a 6 V
+## rail the motor sees about 4 V and needs roughly 6/4 of the duty for the same torque
+## (docs/chassis-envelope.md 8.3) — about 0.42, and one driven axle instead of four
+## driven wheels pushes the same way. Still **provisional until step 1.5 drives on real
+## sand**, which is where the real number comes from.
+const MIN_EFFECTIVE_THROTTLE := 0.45
+
+## Above the floor, response is curved rather than linear so that most of the pad's
+## range lives at the slow end where the aiming happens.
+const THROTTLE_GAMMA := 1.8
+
+## One nudge. Long enough to clear breakaway and actually move, short enough that the
+## result is a step rather than a drive.
+##
+## A steering nudge is the more useful of the two on this chassis: three-position
+## steering offers no small heading correction, so a *timed* full-lock tap while rolling
+## is the only fine correction there is (docs/chassis-envelope.md 8.5).
+const NUDGE_SEC := 0.35
+
+signal speed_mode_changed(mode: Speed)
+signal nudge_state_changed(running: bool)
+
 @export var rover_url := "ws://192.168.4.1:81/"
 @export var auto_connect := true
 
@@ -81,9 +141,17 @@ var _since_telemetry := 0.0
 var _stale := true
 var _had_telemetry := false
 
+var speed_mode: Speed = Speed.TRANSIT
+
 var _holding := false
-var _hold_left := 0.0
-var _hold_right := 0.0
+## What goes on the wire. `_hold_throttle` is shaped; `_hold_steer` is not (see above).
+var _hold_throttle := 0.0
+var _hold_steer := 0.0
+## What the operator asked for, kept unshaped so a mid-press mode change can be reapplied.
+var _raw_throttle := 0.0
+var _raw_steer := 0.0
+var _request_scale := 1.0
+var _nudge_remaining := 0.0
 
 var _ping_timer := 0.0
 var _outstanding: Dictionary = {}  ## ping timestamp -> the same value, awaiting its pong
@@ -154,35 +222,139 @@ func has_capability(name: String) -> bool:
 # --- Sending ----------------------------------------------------------------------
 
 ## Begins (or updates) a held drive command. The frame is repeated automatically until
-## release_drive() — see DRIVE_REPEAT_SEC. `left` and `right` are wheel-side throttles
-## in the range -1.0 .. 1.0; differential (skid) steering, so the difference is the turn.
-func hold_drive(left: float, right: float) -> void:
-	_holding = true
-	_hold_left = clampf(left, -1.0, 1.0)
-	_hold_right = clampf(right, -1.0, 1.0)
-	_repeat_timer = DRIVE_REPEAT_SEC
-	_send_drive()
+## release_drive() — see DRIVE_REPEAT_SEC.
+##
+## `throttle` is -1.0 .. 1.0, positive forward, and is shaped by the current speed mode
+## before it goes on the wire. `steer` is -1.0 .. 1.0, **negative left**, and goes out
+## unshaped. The two are independent: steering with no throttle turns the wheels and
+## moves the rover nowhere, which is a real state the pad has to own up to — see
+## is_steering_without_throttle().
+func hold_drive(throttle: float, steer: float) -> void:
+	_cancel_nudge()
+	_begin_drive(throttle, steer, SPEED_SCALE[speed_mode])
+
+
+## One discrete step, then stop — for lining up on a rock without having to time a
+## button press (Scene 5). It is exactly a held press of NUDGE_SEC: the same repeated
+## `drive` frames, ended by the same zero-throttle frame, so there is nothing new for
+## the rover to understand and nothing new for the failsafe to reason about.
+##
+## Always PRECISION-scaled whatever the mode is set to — a nudge is a fine move by
+## definition, and one that flung the rover forward because the mode happened to be
+## TRANSIT would be a trap. The scaling applies to the throttle only; a steering nudge
+## is full lock for a short time, because full lock is the only lock there is.
+func nudge(throttle: float, steer: float, seconds: float = NUDGE_SEC) -> void:
+	_cancel_nudge()
+	_begin_drive(throttle, steer, SPEED_SCALE[Speed.PRECISION])
+	_nudge_remaining = maxf(0.05, seconds)
+	nudge_state_changed.emit(true)
+
+
+## True while the console is commanding steering with no throttle behind it. The wheels
+## move; the rover does not (docs/protocol.md 3.2). The pad must say so — an operator who
+## presses LEFT expecting a pivot, sees nothing, and presses harder is the failure this
+## exists to prevent (docs/protocol.md 6.4).
+func is_steering_without_throttle() -> bool:
+	return _holding and absf(_hold_steer) >= 0.5 and absf(_hold_throttle) < 0.001
+
+
+func is_nudging() -> bool:
+	return _nudge_remaining > 0.0
 
 
 ## Ends a held drive command: one explicit zero-throttle frame, then silence. Zero
 ## throttle rather than `stop` because the rover stays armed with a commanded speed of
 ## zero, which is what a finger lifting off means (docs/protocol.md 3.3).
 func release_drive() -> void:
+	_cancel_nudge()
 	if not _holding:
 		return
 	_holding = false
-	_hold_left = 0.0
-	_hold_right = 0.0
+	_clear_drive_inputs()
 	_send_drive()
 
 
 ## Deliberate halt. Honoured by the rover in every state, including safe mode and on a
 ## version mismatch, so this is the one command always worth sending.
 func send_stop() -> void:
+	_cancel_nudge()
 	_holding = false
-	_hold_left = 0.0
-	_hold_right = 0.0
+	_clear_drive_inputs()
 	_send({"cmd": "stop"})
+
+
+## Zeroes throttle and steering together. Steering is included deliberately: releasing
+## the pad must also release the steering motor, which is what lets the spring recentre
+## the axle (docs/protocol.md 6.1).
+func _clear_drive_inputs() -> void:
+	_raw_throttle = 0.0
+	_raw_steer = 0.0
+	_hold_throttle = 0.0
+	_hold_steer = 0.0
+
+
+## Switches the pad between transit and precision. Takes effect on a command already
+## being held, immediately rather than at the next repeat — an operator who thumbs the
+## mode button mid-press is asking for the rover to slow down now.
+func set_speed_mode(mode: Speed) -> void:
+	if speed_mode == mode:
+		return
+	speed_mode = mode
+	speed_mode_changed.emit(speed_mode)
+	# A nudge keeps its own scale; it is a fine move regardless of the mode.
+	if _holding and not is_nudging():
+		_request_scale = SPEED_SCALE[speed_mode]
+		_apply_shaping()
+		_send_drive()
+
+
+func toggle_speed_mode() -> void:
+	set_speed_mode(Speed.TRANSIT if speed_mode == Speed.PRECISION else Speed.PRECISION)
+
+
+func speed_mode_name() -> String:
+	return "PRECISION" if speed_mode == Speed.PRECISION else "TRANSIT"
+
+
+func _begin_drive(throttle: float, steer: float, scale: float) -> void:
+	_holding = true
+	_raw_throttle = clampf(throttle, -1.0, 1.0)
+	_raw_steer = clampf(steer, -1.0, 1.0)
+	_request_scale = scale
+	_apply_shaping()
+	_repeat_timer = DRIVE_REPEAT_SEC
+	_send_drive()
+
+
+## Throttle is scaled and curved; steering is not. Scaling `steer` by the speed mode
+## would be a lie on a three-position chassis — a PRECISION-scaled 0.35 falls below the
+## rover's 0.5 threshold and rounds to *straight ahead*, so the pad would silently stop
+## steering in the mode where careful steering matters most.
+func _apply_shaping() -> void:
+	_hold_throttle = _shape(_raw_throttle * _request_scale)
+	_hold_steer = _raw_steer
+
+
+## Maps operator intent onto a throttle the rover can actually act on: curved, then
+## lifted clear of the floor. The result is zero or usable, never in the dead band
+## between — see MIN_EFFECTIVE_THROTTLE.
+func _shape(value: float) -> float:
+	var magnitude := absf(value)
+	if magnitude < 0.001:
+		return 0.0
+	magnitude = minf(magnitude, 1.0)
+	var curved: float = pow(magnitude, THROTTLE_GAMMA)
+	return signf(value) * (MIN_EFFECTIVE_THROTTLE
+			+ (1.0 - MIN_EFFECTIVE_THROTTLE) * curved)
+
+
+## A nudge must be abandonable the instant anything else happens — a moving rover with a
+## command that cannot be interrupted is a worse failure than a twitchy one.
+func _cancel_nudge() -> void:
+	if _nudge_remaining <= 0.0:
+		return
+	_nudge_remaining = 0.0
+	nudge_state_changed.emit(false)
 
 
 ## Mast camera pan/tilt head, in degrees. Absolute angles, not increments.
@@ -193,8 +365,8 @@ func send_mast(pan_deg: float, tilt_deg: float) -> void:
 func _send_drive() -> void:
 	_send({
 		"cmd": "drive",
-		"l": snappedf(_hold_left, 0.01),
-		"r": snappedf(_hold_right, 0.01),
+		"fwd": snappedf(_hold_throttle, 0.01),
+		"steer": snappedf(_hold_steer, 0.01),
 	})
 
 
@@ -219,6 +391,9 @@ func _process(delta: float) -> void:
 			while _socket.get_available_packet_count() > 0:
 				_handle_packet(_socket.get_packet().get_string_from_utf8())
 			_service_handshake(delta)
+			# Before the repeat, so the frame that ends a nudge goes out on this tick
+			# rather than one tick after the timer expired.
+			_service_nudge(delta)
 			_service_drive_repeat(delta)
 			_service_ping(delta)
 
@@ -290,14 +465,43 @@ func _handle_hello(frame: Dictionary) -> void:
 	rover_firmware = str(frame.get("fw", "?"))
 	rover_caps = frame.get("caps", [])
 
-	if rover_version == PROTOCOL_VERSION:
-		_set_state(State.LINKED)
-	else:
+	if rover_version != PROTOCOL_VERSION:
 		push_warning("Rover link: rover speaks v%d, console speaks v%d"
 				% [rover_version, PROTOCOL_VERSION])
 		_set_state(State.INCOMPATIBLE)
+	elif not _steering_declared():
+		# A rover claiming `drive` with no steering token, or with both, is misreporting
+		# itself, and the console cannot know whether a `steer` of 0.3 will be honoured
+		# or rounded to straight (docs/protocol.md 4.1). Refusing is the same call as a
+		# version mismatch: guessing here means driving a rover we do not understand.
+		push_warning("Rover link: caps %s declares drive with no single steering kind"
+				% str(rover_caps))
+		_set_state(State.INCOMPATIBLE)
+	else:
+		_set_state(State.LINKED)
 
 	handshake_completed.emit(rover_version, rover_firmware, rover_caps)
+
+
+## Exactly one steering kind must accompany `drive`. A build with no drivetrain at all
+## needs neither, so the check only bites when `drive` is claimed.
+func _steering_declared() -> bool:
+	if not rover_caps.has("drive"):
+		return true
+	var three: bool = rover_caps.has(STEER_THREE_POSITION)
+	var proportional: bool = rover_caps.has(STEER_PROPORTIONAL)
+	return three != proportional
+
+
+## "3-POSITION", "PROPORTIONAL", or "" when the rover has no drivetrain. Used by the pad
+## to label itself honestly — the operator should not have to remember which rover this
+## build is.
+func steering_kind() -> String:
+	if rover_caps.has(STEER_THREE_POSITION):
+		return "3-POSITION"
+	if rover_caps.has(STEER_PROPORTIONAL):
+		return "PROPORTIONAL"
+	return ""
 
 
 # --- Housekeeping -----------------------------------------------------------------
@@ -369,6 +573,18 @@ func _update_loss() -> void:
 	rtt_loss_pct = 0.0 if _pings_sent == 0 else 100.0 * float(_pongs_lost) / float(_pings_sent)
 
 
+## Counts a nudge down and ends it. Ending it is release_drive(), so a nudge and a
+## finger lifting off a button leave the rover in exactly the same state.
+func _service_nudge(delta: float) -> void:
+	if _nudge_remaining <= 0.0:
+		return
+	_nudge_remaining -= delta
+	if _nudge_remaining <= 0.0:
+		_nudge_remaining = 0.0
+		nudge_state_changed.emit(false)
+		release_drive()
+
+
 func _service_drive_repeat(delta: float) -> void:
 	if not _holding:
 		return
@@ -389,8 +605,10 @@ func _service_staleness(delta: float) -> void:
 
 func _reset_session() -> void:
 	_holding = false
-	_hold_left = 0.0
-	_hold_right = 0.0
+	_clear_drive_inputs()
+	# A nudge in flight when the link drops must not survive the reconnect and resume
+	# against a rover that has already failed safe.
+	_cancel_nudge()
 	_handshake_timer = 0.0
 	_since_telemetry = 0.0
 	_had_telemetry = false

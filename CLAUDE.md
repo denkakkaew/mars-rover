@@ -5,27 +5,44 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Current state
 
 This is a design-and-planning workspace for a proposed educational Mars rover robot, now with
-two scaffolded project skeletons. **No hardware has been procured**, so nothing here has run
-against real motors, servos, or cameras — pin assignments in
-[firmware/include/config.h](firmware/include/config.h) are placeholders to be fixed during
-Phase 1. The repository is under git on branch `main`, with `origin` pointing at
-`https://github.com/denkakkaew/mars-rover`.
+two scaffolded project skeletons. The repository is under git on branch `main`, with `origin`
+pointing at `https://github.com/denkakkaew/mars-rover`.
+
+**An ESP32 exists and passed step 1.1 on 2026-08-13** — an ESP32-D0WD-V3 rev 3 (4 MB flash, no
+PSRAM) on **COM3** via a Silicon Labs CP210x, confirming `board = esp32dev`. Uploads are clean
+at both 460800 and 921600. That is the *only* hardware: **no motors, driver, servos, camera,
+chassis or battery have been procured**, so pin assignments in
+[firmware/include/config.h](firmware/include/config.h) remain placeholders to be fixed at
+step 1.3, and Phase 0 (the BOM and the power-budget decisions) is still unapproved.
 
 **The mission was revised on 2026-07-27 (Revision 2): the robotic arm is gone, replaced by a
 UHF RFID reader that identifies rocks in place, and the two cameras are reduced to one.** See
 "Documents and their authority" below — several files in this repo still describe the old
 Sample-Return mission.
 
-**Phase S is complete (S.1–S.11).** It delivered the protocol contract, host-tested firmware
+**Phase S is complete (S.1–S.15).** It delivered the protocol contract, host-tested firmware
 modules, a desktop simulator with tagged rocks, and a console that runs the whole
 seek → scan → identify loop against that simulator with no hardware in existence. S.9–S.11
-retargeted the Revision 1 work onto the revised mission. Everything from Phase 0 onward is
-either your decisions or blocked on procurement.
+retargeted the Revision 1 work onto the revised mission; S.12–S.13 made the simulator honest
+and gave the console fine-drive modes; **S.14–S.15 retargeted the protocol, firmware,
+simulator and console onto the steered chassis chosen at 0.2, which is what protocol v2 is.**
+Everything from Phase 0 onward is either your decisions or blocked on procurement.
+
+**Rock identification is on hold** and the sensing method is reopened (see
+[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md), step 2.0) — UHF RFID is one candidate rather
+than a settled decision. Driving is the primary line of work.
 
 - [plan/](plan/) — the proposal documents (see next section)
 - [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) — the ordered build plan, in small steps
-- [docs/protocol.md](docs/protocol.md) — the frozen console↔rover message contract
+- [docs/protocol.md](docs/protocol.md) — the console↔rover message contract, **v2**
 - [docs/console-layout.md](docs/console-layout.md) — screen regions, touch sizing, palette
+- [docs/chassis-envelope.md](docs/chassis-envelope.md) — step 0.2's swept-circle arithmetic
+  against the 1.4 m arena, why R5 did not discriminate between the skid-steer candidates, and
+  **§8: what the steered chassis actually chosen changes** — the live section
+- [docs/power-budget.md](docs/power-budget.md) — step 0.3's load table, four-rail plan and
+  session energy estimate. **Awaiting your decisions (its §7).** Carries two open findings:
+  F5 (the committed `BATTERY_DIVIDER_RATIO` would destroy the ADC pin) and F6 (a held turn is
+  a continuous stall, and the L293D runs out of thermal headroom before current headroom)
 - [console/](console/) — Godot 4 touchscreen operator console
 - [firmware/](firmware/) — PlatformIO / Arduino-ESP32 rover firmware
 
@@ -57,7 +74,27 @@ python -m platformio test -e native         # host unit tests — no board neede
 python -m platformio run -t upload          # flash (add -t upload -t monitor to do both)
 python -m platformio device monitor         # serial monitor, 115200
 python -m platformio run -t clean
+python -m platformio run -e bringup -t upload -t monitor   # step 1.1 board sanity
+python -m platformio run -e wifiscan -t upload -t monitor  # steps 1.2/0.5 Wi-Fi survey
 ```
+
+Two bench sketches sit alongside `main.cpp`, each in its own env. All three environments
+exclude the others' sources via `build_src_filter`, so nothing ever links two `setup()`s.
+
+- `[env:bringup]` → [src/bringup.cpp](firmware/src/bringup.cpp): blink, a serial identity
+  block (chip model, MAC, reset reason) and a character echo, with **no Wi-Fi and no
+  `secrets.h`**, so a board can be proven alive before credentials are true of anything. It
+  uploads at 460800 rather than 921600 on purpose — a failed upload at the fast rate is
+  indistinguishable from a dead board on a *first* flash.
+- `[env:wifiscan]` → [src/wifi_scan.cpp](firmware/src/wifi_scan.cpp): continuous 2.4 GHz
+  scan, also credential-free. It names the SSIDs actually on the air (so `secrets.h` gets the
+  exact spelling) and reports non-overlapping channel load for step 0.5. Because beacon RSSI
+  needs no association, **this is the instrument for 1.2's RSSI-through-glass survey** and can
+  be run before the arena network exists.
+
+**Known defect F7**: `main.cpp`'s Wi-Fi join is an unbounded `while` loop — a wrong password or
+an absent AP hangs the board in `setup()` forever, so the WebSocket server never starts and the
+console cannot tell it from dead silicon. See IMPLEMENTATION_PLAN.md step 1.2.
 
 The first build downloads the Xtensa toolchain and the pinned libraries. Copy
 `firmware/include/secrets.h.example` to `secrets.h` (gitignored) and fill in real Wi-Fi
@@ -80,9 +117,18 @@ console can be developed and demonstrated with no hardware. Install deps once wi
 ```powershell
 python tools/fake_rover.py --view                  # ASCII arena, port 81
 python tools/fake_rover.py --latency 250 --loss 5  # start with faults injected
-python tools/fake_rover.py --caps drive,mast,rfid  # pretend Phases 2-3 are built
+python tools/fake_rover.py --caps drive,steer3,mast,rfid   # pretend Phases 2-3 are built
+python tools/fake_rover.py --caps drive            # no steering token: console must refuse
+python tools/fake_rover.py --steer-lock 15         # a turning circle that does not fit
 python tools/fake_rover.py --read-range 0.5 --flaky 20 --dead-tags E2801160600002
 ```
+
+Its motion model is a **steered bicycle model** (S.15), not skid steer: yaw rate is
+`v · tan(δ) / wheelbase`, so **a stationary rover cannot turn** — steering at zero throttle
+swings the axle and moves nothing. `--wheelbase` and `--steer-lock` set the minimum turning
+circle, which is what risk R5 now means, and the ASCII view reports whether a U-turn fits the
+drivable width. At the default 0.155 m / 25° it needs 0.95 m of 1.30 m; at 15° of lock it does
+not fit at all, so those two switches are worth turning before trusting the verdict.
 
 It carries five **tagged rocks** in the arena and models UHF backscatter well enough to be
 useful: RSSI rising with the fourth power of distance as the rover closes, an antenna beam
@@ -100,13 +146,18 @@ $env:ROVER_URL = "ws://127.0.0.1:81/"
 ```
 
 While it runs, type `help` + Enter for runtime switches: `lat <ms>`, `loss <pct>`, `drop`
-(hard disconnect), `tlm on|off`, `ver <n>`, `batt <volts>`, `reset`, plus the RFID ones —
-`rocks`, `kill <id>`, `revive <id>`, `range <m>`, `flaky <pct>`, `tag <id> [rssi]`.
+(hard disconnect), `tlm on|off`, `ver <n>`, `batt <volts>`, `reset`, the RFID ones —
+`rocks`, `kill <id>`, `revive <id>`, `range <m>`, `flaky <pct>`, `tag <id> [rssi]` — and the
+drive-model ones: `surface`, `slip`, `drift <deg>`, `coast`, `breakaway`, `chassis`,
+`wheelbase`, `lock <deg>`, `dressing`, `model`.
 
 The simulator mirrors the firmware's strict parsing and failsafe deliberately — **it is a
 second implementation of the same contract**, so a behaviour difference between it and
 `lib/Protocol`/`lib/Safety` means one of them has a bug. Keep them in step when the protocol
 changes.
+
+All three are back in step at **v2** as of S.15. The simulator's `parse()` carries the retired
+`l`/`r` rejection for exactly this reason — it is the second opinion on the firmware's.
 
 ## Documents and their authority
 
@@ -152,9 +203,10 @@ Two independent channels, and keeping them separate is still the central archite
 decision:
 
 - **Control channel** — Godot touchscreen console → ESP32 over Wi-Fi (WebSocket), with
-  Bluetooth as fallback. ESP32 drives 4 DC motors through a dual H-bridge (differential /
-  skid steering) and the mast pan/tilt servos, polls the RFID reader over UART, and publishes
-  telemetry and tag reads back.
+  Bluetooth as fallback. ESP32 drives **one drive motor and one steering motor through an
+  L293D** (steered chassis, chosen at step 0.2 — *not* skid steer; it cannot pivot in place)
+  and the mast pan/tilt servos, polls the RFID reader over UART, and publishes telemetry and
+  tag reads back.
 - **Video channel** — the mast IP camera on its pan/tilt head → one monitor over Wi-Fi. It
   serves as both the survey view and, aimed forward and down, the driving view.
 
@@ -178,28 +230,42 @@ both bands, not an assumption (risk R6).
 ## Control protocol
 
 **[docs/protocol.md](docs/protocol.md) is the authoritative contract** — every message, field,
-unit, and range, plus the failsafe rules. It is frozen at v1. When code and that document
+unit, and range, plus the failsafe rules. It is at **v2**. When code and that document
 disagree, the code is wrong; changing the protocol means editing the document first, bumping
 the version, and then changing every implementation. Its §8 tracks what is implemented versus
 specified, and carries the open findings.
 
-Retargeted to Revision 2 at step S.9: the `arm` command is gone, the `tag` frame (§4.4) and
-the `rfid` reader-status field (§4.2) are in, and `caps` is now `drive, mast, rfid`. **The
-version stayed at 1** — §5 of the contract shows message by message why none of that was a
-breaking change, which is the payoff of two S.2 decisions (unknown verbs are non-fatal,
-capabilities are discovered in the handshake rather than hard-coded).
+Retargeted to Revision 2 at step S.9 with **no version bump**: the `arm` command went, the
+`tag` frame (§4.4) and the `rfid` reader-status field (§4.2) came in. §5.2 shows message by
+message why none of that was breaking — the payoff of two S.2 decisions (unknown verbs are
+non-fatal, capabilities are discovered in the handshake rather than hard-coded).
+
+**Bumped to v2 at step S.14**, because step 0.2 chose a chassis with one drive motor and one
+steering motor. `drive` is now throttle plus steering; `l` and `r` are **retired**, and §5.1
+explains why this one *was* breaking where S.9 was not: a v1 `drive` parses at a v2 rover as a
+valid zero-throttle command, so the rover would sit armed and motionless while the operator
+held FORWARD. Two defences, deliberately doubled up — the handshake refuses to arm a v1
+console, and a retired `l`/`r` makes the frame malformed (§2.3a) so it does not refresh the
+failsafe.
 
 In short: JSON text frames over a WebSocket, ESP32 as server on port 81, console as client.
 Console → rover carries a `cmd` discriminator, rover → console carries a `t`. `drive` and
-`stop` are actuated; `mast` and `arm` are accepted shapes the firmware logs and ignores until
-Phases 2–3.
+`stop` are actuated; `mast` is an accepted shape the firmware logs and ignores until Phase 3.
 
 ```
-{"cmd":"drive","l":0.6,"r":-0.6}        # per-side throttle, -1.0 .. 1.0
+{"cmd":"drive","fwd":0.6,"steer":-1.0}  # throttle + steering, -1.0 .. 1.0; steer < 0 = left
 {"cmd":"mast","pan":0,"tilt":15}        # degrees
 {"t":"tlm","battery_v":11.8,"mode":"safe","rssi":-58,"rfid":"ready"}   # every 500 ms
 {"t":"tag","id":"E2801160600002","rssi":-47,"ts":184320}   # unsolicited, per read
 ```
+
+**Steering is three-position** — full lock or centre, no intermediate angle, with a spring
+recentring it unpowered. `steer` stays a **float on the wire** and the firmware thresholds it
+at ±0.5; which kind of steering a build has is advertised in the handshake `caps` as `steer3`
+or `steerprop`, so a later proportional chassis needs no v3. Two consequences worth holding
+onto: there is **no small heading correction** (only a full-lock tap the other way), and
+**failing safe centres the steering for free**, so a rover that cuts out mid-turn coasts
+straight instead of arcing into the glass (to be confirmed on the bench at 1.3).
 
 Safety behaviours that are deliberate and must survive refactors:
 
@@ -237,7 +303,11 @@ file, otherwise it lands in the Godot user data folder and the path is printed a
 - `platformio.ini` pins `espressif32@^6.9.0` (arduino-esp32 2.0.x) because `Drive` uses the
   2.x LEDC API (`ledcSetup`/`ledcAttachPin`). Bumping to core 3.x requires switching to
   `ledcAttach`.
-- LEDC channels 0 and 1 are reserved for the drive motors; servo work must claim its own.
+- LEDC channel 0 is the drive motor and channel 1 the steering motor; servo work must claim
+  its own. `Drive` runs them at **1.5 kHz, not 20 kHz** — an L293D is a slow Darlington part
+  that cannot switch cleanly up there, and the low-speed torque it costs is exactly what the
+  throttle floor depends on. The motors whine audibly as a result; that is the trade, not a
+  fault.
 - [console/scripts/rover_link.gd](console/scripts/rover_link.gd) owns all transport concerns
   (connect, reconnect, handshake, JSON framing, the drive repeat, RTT probing); UI scripts
   call its methods and read its state, and never touch the socket. It exposes `is_linked()`

@@ -6,7 +6,7 @@
 //
 //   lib/Protocol — JSON frame <-> typed Command, and telemetry serialisation
 //   lib/Safety   — the failsafe state machine
-//   lib/Drive    — H-bridge throttle
+//   lib/Drive    — H-bridge throttle and steering
 //
 // What is left here is the part that genuinely needs the board: Wi-Fi, the WebSocket
 // server, the battery ADC, and the wiring between those three. Camera video is
@@ -26,9 +26,10 @@
 
 namespace {
 
-Drive g_drive({PIN_LEFT_IN1, PIN_LEFT_IN2, PIN_LEFT_PWM, LEDC_CHANNEL_LEFT},
-              {PIN_RIGHT_IN1, PIN_RIGHT_IN2, PIN_RIGHT_PWM, LEDC_CHANNEL_RIGHT},
-              PIN_MOTOR_STANDBY);
+Drive g_drive(
+    {PIN_DRIVE_IN1, PIN_DRIVE_IN2, LEDC_CHANNEL_DRIVE_IN1, LEDC_CHANNEL_DRIVE_IN2},
+    {PIN_STEER_IN1, PIN_STEER_IN2},
+    PIN_MOTOR_STANDBY);
 
 WebSocketsServer g_server(CONTROL_WS_PORT);
 safety::Failsafe g_failsafe(COMMAND_TIMEOUT_MS);
@@ -43,7 +44,12 @@ bool g_handshake_expired = false;
 // Subsystems this build actually has (docs/protocol.md 4.1). "rfid" joins the list when
 // Phase 2 fits the reader and "mast" when Phase 3 fits the servos; until then the console
 // greys those out rather than sending commands into a void.
-const char *const kCapabilities[] = {"drive"};
+//
+// "steer3" declares three-position steering, so the console knows a `steer` of 0.3 will be
+// rounded away rather than honoured. Exactly one steering token must accompany "drive" —
+// a later proportional-steering build swaps it for "steerprop" and needs no version bump,
+// which is the whole reason `steer` stayed a float on the wire (docs/protocol.md 3.2.1).
+const char *const kCapabilities[] = {"drive", "steer3"};
 
 // One shared outbound buffer. Every frame is built and sent within a single call, and
 // the WebSocket library copies before returning, so there is nothing to overlap.
@@ -139,7 +145,7 @@ void handleCommand(uint8_t client, const protocol::Command &cmd, uint32_t now) {
 
     case protocol::CommandType::Drive:
       if (g_state == safety::State::Armed) {
-        g_drive.setThrottle(cmd.left, cmd.right);
+        g_drive.setDrive(cmd.throttle, cmd.steer);
       }
       break;
 
@@ -209,6 +215,26 @@ void setup() {
   g_drive.begin();
 
   WiFi.mode(WIFI_STA);
+
+  // Wi-Fi modem sleep off — measured at step 1.2, and the single largest latency win
+  // available to this project. Associated STA mode defaults to WIFI_PS_MIN_MODEM, which
+  // parks the radio between AP beacons; a control frame arriving mid-doze waits for the
+  // next DTIM. Measured on real hardware, 80 probes each:
+  //
+  //     power save on   min  7.1   median 43.9   p95  99.3   max 125.1 ms
+  //     power save off  min  8.2   median 12.1   p95  19.8   max  36.4 ms
+  //
+  // p95 sits *at* the 100 ms R1 target with it on and at a fifth of it with it off
+  // (docs/protocol.md 4.5). The minimum barely moves, which is what identifies the
+  // cause: the link was always fast, the radio was asleep.
+  //
+  // The cost is current — the radio no longer dozes. docs/power-budget.md already
+  // budgets the ESP32 at 120 mA on that basis, so this is priced in rather than a
+  // surprise for step 1.7. Do not re-enable power save to save battery without
+  // re-measuring latency: R1 is the risk this project is most exposed to, and the
+  // headroom bought here is what step 3.3 spends on video contention.
+  WiFi.setSleep(false);
+
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   while (WiFi.status() != WL_CONNECTED) {
     delay(250);

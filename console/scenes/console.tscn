@@ -237,6 +237,60 @@ text = "BACK"
 [node name="SpacerBottomRight" type="Control" parent="Margin/Layout/Main/DrivePanel/Column/DrivePad"]
 layout_mode = 2
 
+[node name="SteeringLabel" type="Label" parent="Margin/Layout/Main/DrivePanel/Column"]
+layout_mode = 2
+horizontal_alignment = 1
+autowrap_mode = 3
+theme_override_font_sizes/font_size = 18
+text = "STEERING  ·  ---"
+
+[node name="SpeedMode" type="Button" parent="Margin/Layout/Main/DrivePanel/Column"]
+custom_minimum_size = Vector2(0, 100)
+layout_mode = 2
+toggle_mode = true
+text = "SPEED  ·  TRANSIT"
+
+[node name="NudgeLabel" type="Label" parent="Margin/Layout/Main/DrivePanel/Column"]
+layout_mode = 2
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 18
+text = "NUDGE  ·  one step, then stop  ·  ARC = step at full lock"
+
+[node name="NudgeRow" type="HBoxContainer" parent="Margin/Layout/Main/DrivePanel/Column"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="NudgeLeft" type="Button" parent="Margin/Layout/Main/DrivePanel/Column/NudgeRow"]
+custom_minimum_size = Vector2(0, 100)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "ARC L"
+
+[node name="NudgeForward" type="Button" parent="Margin/Layout/Main/DrivePanel/Column/NudgeRow"]
+custom_minimum_size = Vector2(0, 100)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "FWD"
+
+[node name="NudgeBack" type="Button" parent="Margin/Layout/Main/DrivePanel/Column/NudgeRow"]
+custom_minimum_size = Vector2(0, 100)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "BACK"
+
+[node name="NudgeRight" type="Button" parent="Margin/Layout/Main/DrivePanel/Column/NudgeRow"]
+custom_minimum_size = Vector2(0, 100)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "ARC R"
+
+[node name="KeyHint" type="Label" parent="Margin/Layout/Main/DrivePanel/Column"]
+layout_mode = 2
+horizontal_alignment = 1
+autowrap_mode = 3
+theme_override_font_sizes/font_size = 16
+text = "KEYS  ·  ↑ ↓ drive  ·  ← → steer  ·  SPACE stop"
+
 [node name="AnalysisPanel" type="PanelContainer" parent="Margin/Layout/Main"]
 layout_mode = 2
 size_flags_horizontal = 3
