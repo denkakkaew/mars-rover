@@ -87,7 +87,7 @@ performance. Rows that changed from the original Sample-Return specification are
 | Parameter | Target value |
 |---|---|
 | Arena | Sealed glass box, **1.4 m wide × 3.0 m long** |
-| Rover drive | **4 wheels**, independent / differential steering |
+| Rover drive | **4 wheels** — driven rear axle, **steered front axle** (car-style, not tank-style) *(changed)* |
 | Manipulator | **None — removed in this revision** *(changed)* |
 | Sensing | **RFID reader + antenna, front-mounted** *(new)* |
 | Tagged samples | **Passive RFID tag sealed inside each rock** *(new)* |
@@ -101,24 +101,37 @@ performance. Rows that changed from the original Sample-Return specification are
 
 ## 4. Hardware Specification — Proposed
 
-*Sourcing status: nothing procured yet — the parts and part classes below are the proposed
-build, pending the approval described in Section 10.*
+*Sourcing status: the chassis kit, its motors and the motor driver have been selected and
+bench-tested; everything else below is a proposed part class, pending the approval described in
+Section 10.*
 
-### 4.1 Rover platform
-- **Chassis:** 4-wheel-drive rover sized to operate within the 1.4 m box width, leaving
-  clearance to turn.
-- **Drive:** 4 × DC geared motors driven through a dual H-bridge motor driver
-  (e.g. TB6612FNG or L298N). Steering is differential (skid-steer): left/right wheel speed
-  difference produces turns — forward, backward, left, right.
+### 4.1 Rover platform *(revised — steered chassis)*
+- **Chassis:** a **steered** rover — a driven rear axle and a steering front axle — sized to
+  operate within the 1.4 m box width, leaving clearance to turn.
+- **Drive:** **two DC geared motors on the rear axle**, driven together, plus **one motor that
+  swings the front axle** to steer, all through a dual H-bridge motor driver (a DRV8833).
+  Turning is by steering angle, not by wheel-speed difference.
+- *Why this changed:* the earlier draft proposed a 4-wheel skid-steer platform, which turns by
+  spinning its wheels at different speeds. The chassis selected instead steers like a car. The
+  practical differences for the operator are that **the rover cannot spin on the spot** — it
+  needs forward or backward motion to change direction, and has a minimum turning circle — and
+  that **steering is full-lock or straight**, with a spring returning the wheels to centre, so
+  fine heading corrections are made with brief taps rather than a held input. Both are
+  accounted for in the console design (Section 5) and in Risk R5 (Section 8).
+- *A safety benefit that came with it:* because the steering springs back to centre whenever it
+  is unpowered, a rover that loses its link mid-turn **coasts straight rather than continuing
+  to arc**. This has been confirmed on the bench.
 - **No manipulator in this revision:** the robotic arm from the original design is removed.
   The front mounting point previously reserved for the arm now carries the RFID antenna
   (Section 4.3) instead.
 
 ### 4.2 Vision *(revised — single camera)*
-- **Mast camera** — mounted on a vertical pole, on a **pan/tilt head (2 servos)**, so the
-  operator can look left / right / up / down to survey the field, and aim it forward and down
-  to drive. The front camera from the earlier design has been removed; the mast camera is now
-  the rover's only camera.
+- **Mast camera** — mounted on a vertical pole, on a **pan/tilt head**, so the operator can
+  look left / right / up / down to survey the field, and aim it forward and down to drive. The
+  front camera from the earlier design has been removed; the mast camera is now the rover's
+  only camera.
+- **Four small servos** carry that movement: a pan/tilt pair at the mast and a second pan/tilt
+  pair at the camera itself.
 - *Why a single camera:* dropping the front camera cuts part count and wiring, and — more
   importantly — halves the video bandwidth competing with the control channel over Wi-Fi (see
   the revised Risk R1 in Section 8). The trade-off is that the operator now time-shares one
@@ -343,7 +356,7 @@ Some risks carry over unchanged from the original proposal; the manipulator risk
 | R2 | **RFID read reliability** — will the antenna get a clean, repeatable read of a tag embedded inside an irregular rock at an unpredictable angle? *(changed)* | If reads are intermittent or missed, Scene 6 (the core "detect" step) becomes frustrating or unreliable, undermining the whole mission loop | Choose tags and antenna gain with margin above the minimum needed range; test against several rock sizes/orientations in Phase 2 before moving to Phase 3; use signal strength (not just a bare pass/fail read) to give the operator feedback while still approaching |
 | R3 | Camera latency/framerate over Wi-Fi | Choppy or delayed video makes the visual approach (Scene 5) hard to judge — and with the front camera removed, the mast camera is now the rover's only source of visual feedback, raising the stakes of it being reliable | Keep resolution modest to protect frame rate; verify the feed runs smoothly during Phase 3, before the console is considered done |
 | R4 | Power budget / battery runtime for an **extended, repeatable survey session** | Because the mission can now repeat for many rocks in one session rather than ending after one collect-and-return, total runtime demands may be higher than the original design assumed | Measure actual current draw per subsystem (including the RFID reader) in Phase 1; size the LiPo pack with margin for a realistic multi-rock session, once real numbers exist |
-| R5 | Mechanical clearance for a 4-wheel chassis to turn inside a 1.4 m-wide arena | A chassis that cannot turn in place limits maneuvering room significantly | Validate chassis footprint and turning radius against arena dimensions before any fabrication (Phase 0/1) |
+| R5 | Mechanical clearance to turn inside a 1.4 m-wide arena *(sharpened — the chassis selected is steered, not skid-steer)* | The rover **cannot turn in place at all**; it has a minimum turning circle, and if that circle is wider than the arena, turning round takes a three-point turn against the glass rather than a single move | Measure the actual turning circle at full lock against the drivable width early in Phase 1, before the arena is dressed; the mission is free-drive, so a three-point turn is acceptable if it comes to that, but it must be known rather than discovered |
 | R6 | RF performance through the glass enclosure, **for both Wi-Fi and UHF RFID** *(expanded)* | Signal could be weaker than expected for either link if the box or its dressing (sand, rocks) attenuates it more than assumed | Glass is largely RF-transparent compared to a metal enclosure for both bands, but this is a checkpoint to *verify* for both Wi-Fi and RFID in Phase 1/2, not an assumption to build on |
 | R7 | **Tag survivability during rock preparation** *(new)* | If tags are damaged by heat, pressure, or adhesive while being sealed inside rocks, they will simply never be read, and the failure is invisible until Phase 2 testing | Confirm the tag embedding process (adhesive/epoxy type, cure temperature) against the tag manufacturer's tolerances before embedding the full batch of arena rocks; test-read every tag immediately after embedding, not just before |
 | R8 | **Single point of vision** *(new)* — with the front camera removed, the mast camera is the rover's only eyes, and the operator must repoint it between a forward driving view and a survey/scan view rather than having both at once | Could make fine positioning in Scene 5 harder (driving toward a target while also wanting a wider view), and if the mast camera or its pan/tilt mechanism fails, the rover has no vision at all — there is no second camera to fall back on | Default the mast camera to a forward-and-down "driving" position between surveys so the operator is not blind while approaching a target; treat mast pan/tilt reliability as higher priority than in the original two-camera design; validate the forward-tilt driving view specifically during Phase 3 |
@@ -394,8 +407,9 @@ from the original proposal are repeated here for convenience.
 |---|---|
 | **ESP32** | A small, inexpensive computer chip with Wi-Fi and Bluetooth built in — the "brain" that controls the rover's motors and sensors. |
 | **H-bridge** | An electronic switch circuit that lets a small computer control a motor's direction and speed. |
-| **Differential (skid) steering** | Turning by spinning the left and right wheels at different speeds — like a tank — instead of a car-style steering wheel. |
-| **Servo** | A small motor that moves to a precise commanded angle; used here for the mast's pan/tilt head. |
+| **Differential (skid) steering** | Turning by spinning the left and right wheels at different speeds — like a tank. This is what the earlier draft proposed; **this design does not use it.** |
+| **Steered chassis** *(changed)* | Turning by angling the front wheels, like a car. The rover must be moving to change direction, and has a minimum turning circle it cannot turn inside. |
+| **Servo** | A small motor that moves to a precise commanded angle; used here for the mast and camera pan/tilt heads. |
 | **RFID** *(new)* | Radio-Frequency IDentification — a way to read a small chip's unique ID wirelessly using radio waves, without needing a battery in the chip. |
 | **Passive RFID tag** *(new)* | A tiny chip-and-antenna sticker or capsule with no battery of its own — it draws its power from the reader's radio signal, which is why it can be sealed inside a rock indefinitely with nothing to maintain. |
 | **UHF** *(new)* | Ultra-High Frequency — the radio band (roughly 860–960 MHz) used by the RFID reader in this design, chosen because it gives more usable read range than short-range (NFC-style) tags. |

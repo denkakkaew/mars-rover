@@ -10,10 +10,21 @@ pointing at `https://github.com/denkakkaew/mars-rover`.
 
 **An ESP32 exists and passed step 1.1 on 2026-08-13** — an ESP32-D0WD-V3 rev 3 (4 MB flash, no
 PSRAM) on **COM3** via a Silicon Labs CP210x, confirming `board = esp32dev`. Uploads are clean
-at both 460800 and 921600. That is the *only* hardware: **no motors, driver, servos, camera,
-chassis or battery have been procured**, so pin assignments in
-[firmware/include/config.h](firmware/include/config.h) remain placeholders to be fixed at
-step 1.3, and Phase 0 (the BOM and the power-budget decisions) is still unapproved.
+at both 460800 and 921600.
+
+**The chassis kit and drivers exist too, and step 1.3 achieved first motion on 2026-08-13** —
+three 130-class DC motors (**two drive, one steering**) and a 4.8 V bench pack. `config.h`
+carries **real pins**, not placeholders.
+
+**The drive wiring was reworked on 2026-08-30 and now uses both driver chips at once**: the
+two drive motors on an **L293D** (one motor per channel, direction inputs tied together in
+the loom, both enables strapped to VCC) and the steering motor on the **DRV8833** (STBY
+strapped to VCC). Neither chip gives the firmware an enable pin any more, so both are
+sign-magnitude on their direction inputs. **The drive forward input moved GPIO26 → GPIO32**
+in the same change: GPIO26 had degraded to 0.9 V driving forward where GPIO27 still metered a
+clean 3.3 V driving back — a damaged output driver, not a firmware fault. Still **not** procured: the servos, the camera, the sensing payload and the
+flight battery — and Phase 0 (the BOM and the power-budget decisions) is still unapproved, so
+the pack in §3.3 of the power budget is a recommendation rather than a part.
 
 **The mission was revised on 2026-07-27 (Revision 2): the robotic arm is gone, replaced by a
 UHF RFID reader that identifies rocks in place, and the two cameras are reduced to one.** See
@@ -40,9 +51,13 @@ than a settled decision. Driving is the primary line of work.
   against the 1.4 m arena, why R5 did not discriminate between the skid-steer candidates, and
   **§8: what the steered chassis actually chosen changes** — the live section
 - [docs/power-budget.md](docs/power-budget.md) — step 0.3's load table, four-rail plan and
-  session energy estimate. **Awaiting your decisions (its §7).** Carries two open findings:
-  F5 (the committed `BATTERY_DIVIDER_RATIO` would destroy the ADC pin) and F6 (a held turn is
-  a continuous stall, and the L293D runs out of thermal headroom before current headroom)
+  session energy estimate, **re-estimated 2026-08-18** against the DRV8833, three motors and
+  four servos (its §0 tables what changed). **Awaiting your decisions (its §7).** Carries four
+  open findings: F5 (the committed `BATTERY_DIVIDER_RATIO` would destroy the ADC pin), F6 (a
+  held turn is a continuous stall at *full* rail voltage since 1.3 removed the steering PWM, so
+  the driver runs out of thermal headroom), F8 (three motors, two bridges — the drive pair must
+  share bridge A) and F9 (the L293D's 2 V drop was absorbing pack excess and limiting stall
+  current, and the DRV8833 does neither)
 - [console/](console/) — Godot 4 touchscreen operator console
 - [firmware/](firmware/) — PlatformIO / Arduino-ESP32 rover firmware
 
@@ -203,10 +218,24 @@ Two independent channels, and keeping them separate is still the central archite
 decision:
 
 - **Control channel** — Godot touchscreen console → ESP32 over Wi-Fi (WebSocket), with
-  Bluetooth as fallback. ESP32 drives **one drive motor and one steering motor through an
-  L293D** (steered chassis, chosen at step 0.2 — *not* skid steer; it cannot pivot in place)
-  and the mast pan/tilt servos, polls the RFID reader over UART, and publishes telemetry and
-  tag reads back.
+  Bluetooth as fallback. ESP32 drives **two drive motors and one steering motor** (steered
+  chassis, chosen at step 0.2 — *not* skid steer; it cannot pivot in place) and **four**
+  pan/tilt servos (mast ×2, camera ×2), polls the RFID reader over UART, and publishes
+  telemetry and tag reads back.
+
+  **Two driver chips, split by function** (2026-08-30). The **drive** motors are on an
+  **L293D**, one motor per channel — front on output A, rear on output B — which is what
+  finally answered power-budget F8: three motors no longer contend for two bridges. Their
+  direction inputs are *tied together in the loom* (IN1+IN3, IN2+IN4), so both channels always
+  take the same direction and duty; there is no independent control of the two drive wheels,
+  and a steered chassis should not have any. The **steering** motor has the **DRV8833** to
+  itself. `V_M` on the DRV8833 maxes at **10.8 V**, which still rules out a 3S pack.
+
+  **Both L293D enables and the DRV8833's STBY are strapped to VCC**, so the firmware owns no
+  enable pin on either chip and the PWM lives on the direction inputs. One consequence is
+  worth holding onto: with the enable high an L293D has no high-impedance state, so a
+  zero-throttle drive command **brakes** rather than coasts. The DRV8833's steering channel
+  still coasts at centre, which is what lets the return spring recentre the axle.
 - **Video channel** — the mast IP camera on its pan/tilt head → one monitor over Wi-Fi. It
   serves as both the survey view and, aimed forward and down, the driving view.
 
@@ -240,8 +269,10 @@ Retargeted to Revision 2 at step S.9 with **no version bump**: the `arm` command
 message why none of that was breaking — the payoff of two S.2 decisions (unknown verbs are
 non-fatal, capabilities are discovered in the handshake rather than hard-coded).
 
-**Bumped to v2 at step S.14**, because step 0.2 chose a chassis with one drive motor and one
-steering motor. `drive` is now throttle plus steering; `l` and `r` are **retired**, and §5.1
+**Bumped to v2 at step S.14**, because step 0.2 chose a steered chassis — one throttle and one
+steering angle, whatever the motor count behind them (the rear axle has two motors driven off
+a single bridge, which the wire format neither knows nor needs to). `drive` is now throttle
+plus steering; `l` and `r` are **retired**, and §5.1
 explains why this one *was* breaking where S.9 was not: a v1 `drive` parses at a v2 rover as a
 valid zero-throttle command, so the rover would sit armed and motionless while the operator
 held FORWARD. Two defences, deliberately doubled up — the handshake refuses to arm a v1
@@ -303,11 +334,21 @@ file, otherwise it lands in the Godot user data folder and the path is printed a
 - `platformio.ini` pins `espressif32@^6.9.0` (arduino-esp32 2.0.x) because `Drive` uses the
   2.x LEDC API (`ledcSetup`/`ledcAttachPin`). Bumping to core 3.x requires switching to
   `ledcAttach`.
-- LEDC channel 0 is the drive motor and channel 1 the steering motor; servo work must claim
-  its own. `Drive` runs them at **1.5 kHz, not 20 kHz** — an L293D is a slow Darlington part
-  that cannot switch cleanly up there, and the low-speed torque it costs is exactly what the
-  throttle floor depends on. The motors whine audibly as a result; that is the trade, not a
-  fault.
+- **LEDC channels 0 and 1 are both the drive** — with the L293D enables strapped to VCC there
+  is no enable to modulate, so the PWM moves to whichever direction input matches the command
+  and each input needs its own channel. **The steering claims no LEDC channel at all**: it is
+  three-position, so there is no speed to modulate, and step 1.3 measured that a PWM-limited
+  steering channel could not shift the axle against its return spring. Channels 2 upward are
+  free for the Phase 3 servos, which need **four** (mast pan/tilt ×2, camera pan/tilt ×2).
+- `Drive` runs the drive PWM at **1.5 kHz**, not the 20 kHz step 1.3 ran on the DRV8833. The
+  drive motors are back behind an L293D, and a bipolar Darlington bridge cannot switch cleanly
+  up there. The audible whine is the price of that part. The DRV8833 would take 20 kHz happily
+  but now carries only the steering, which takes no PWM at all — so nothing is left to gain by
+  raising it.
+- **GPIO26 is out of service.** It metered 0.9 V driving forward on 2026-08-30 where GPIO27
+  metered 3.3 V driving back, after a period of working: a damaged output driver. The drive
+  forward input moved to **GPIO32**, which the DRV8833's strapped STBY had just freed and which
+  — unlike GPIO12/GPIO14 — emits nothing during boot. Do not move the drive back onto GPIO26.
 - [console/scripts/rover_link.gd](console/scripts/rover_link.gd) owns all transport concerns
   (connect, reconnect, handshake, JSON framing, the drive repeat, RTT probing); UI scripts
   call its methods and read its state, and never touch the socket. It exposes `is_linked()`

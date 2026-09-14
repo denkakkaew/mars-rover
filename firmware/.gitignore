@@ -4,3 +4,4 @@ CMakeListsPrivate.txt
 
 # Wi-Fi credentials — copy secrets.h.example to secrets.h locally
 include/secrets.h
+plan/*
