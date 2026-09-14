@@ -26,10 +26,8 @@
 
 namespace {
 
-Drive g_drive(
-    {PIN_DRIVE_IN1, PIN_DRIVE_IN2, LEDC_CHANNEL_DRIVE_IN1, LEDC_CHANNEL_DRIVE_IN2},
-    {PIN_STEER_IN1, PIN_STEER_IN2},
-    PIN_MOTOR_STANDBY);
+Drive g_drive({PIN_DRIVE_IN1, PIN_DRIVE_IN2, LEDC_CHANNEL_DRIVE_IN1, LEDC_CHANNEL_DRIVE_IN2},
+              {PIN_STEER_IN1, PIN_STEER_IN2});
 
 WebSocketsServer g_server(CONTROL_WS_PORT);
 safety::Failsafe g_failsafe(COMMAND_TIMEOUT_MS);
@@ -208,11 +206,30 @@ void publishTelemetry() {
   g_server.broadcastTXT(g_out, length);
 }
 
-}  // namespace
 
-void setup() {
-  Serial.begin(115200);
-  g_drive.begin();
+// ---- Wi-Fi, without ever blocking ----------------------------------------------------
+//
+// This used to be `while (WiFi.status() != WL_CONNECTED) delay(250);` in setup(), which
+// meant a wrong password, a downed AP or a rover parked in a Wi-Fi hole left the board
+// stuck in setup() forever: no WebSocket server, no telemetry, and — from the console's
+// side — indistinguishable from dead silicon. That is IMPLEMENTATION_PLAN.md finding F7,
+// and it is precisely the confusion step 1.1's Wi-Fi-free bring-up sketch was designed to
+// avoid, reintroduced one step later.
+//
+// It matters most exactly when the rover is least reachable: running on battery with no
+// serial cable attached, which is the only way it will ever run in the arena.
+//
+// So: try, carry on regardless, and keep retrying in the background. The rover comes up
+// whether or not the network does, the WebSocket server is listening the moment an
+// address arrives, and an AP that returns recovers the rover without a power cycle. None
+// of this weakens the failsafe — an unassociated rover receives no commands, so
+// Safety times it out and the motors stay cut (docs/protocol.md 6.2).
+
+uint32_t g_wifi_attempt_ms = 0;
+bool g_wifi_up = false;
+
+void beginWifi(uint32_t now) {
+  g_wifi_attempt_ms = now;
 
   WiFi.mode(WIFI_STA);
 
@@ -225,24 +242,120 @@ void setup() {
   //     power save off  min  8.2   median 12.1   p95  19.8   max  36.4 ms
   //
   // p95 sits *at* the 100 ms R1 target with it on and at a fifth of it with it off
-  // (docs/protocol.md 4.5). The minimum barely moves, which is what identifies the
-  // cause: the link was always fast, the radio was asleep.
+  // (docs/protocol.md 4.5). The minimum barely moves, which is what identifies the cause:
+  // the link was always fast, the radio was asleep.
   //
-  // The cost is current — the radio no longer dozes. docs/power-budget.md already
-  // budgets the ESP32 at 120 mA on that basis, so this is priced in rather than a
-  // surprise for step 1.7. Do not re-enable power save to save battery without
-  // re-measuring latency: R1 is the risk this project is most exposed to, and the
-  // headroom bought here is what step 3.3 spends on video contention.
+  // Reapplied on every join attempt rather than once at boot, so a reconnect cannot
+  // silently come back with power save on. Do not re-enable it to save battery without
+  // re-measuring latency: R1 is the risk this project is most exposed to.
   WiFi.setSleep(false);
 
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(250);
-    Serial.print('.');
+  // A fixed address, so the console can be pointed at the rover without first reading a
+  // DHCP lease off the serial monitor — which does not exist once the rover is
+  // free-running on battery (config.h, ROVER_STATIC_IP). An empty ROVER_STATIC_IP, or a
+  // router that refuses the address, falls back to DHCP; the log line on association
+  // reports the address actually in force either way.
+  if (ROVER_STATIC_IP[0] != 0) {
+    IPAddress ip, gateway, subnet;
+    if (ip.fromString(ROVER_STATIC_IP) && gateway.fromString(ROVER_GATEWAY_IP) &&
+        subnet.fromString(ROVER_SUBNET_MASK)) {
+      if (!WiFi.config(ip, gateway, subnet, gateway)) {
+        log_e("Static IP %s refused — falling back to DHCP", ROVER_STATIC_IP);
+      }
+    } else {
+      log_e("Static IP config is not parseable — falling back to DHCP");
+    }
   }
-  Serial.printf("\nRover online at ws://%s:%u/ (protocol v%d, fw %s)\n",
-                WiFi.localIP().toString().c_str(), CONTROL_WS_PORT, protocol::kVersion,
-                FIRMWARE_VERSION);
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  log_i("Joining %s", WIFI_SSID);
+}
+
+void serviceWifi(uint32_t now) {
+  const bool up = (WiFi.status() == WL_CONNECTED);
+
+  if (up != g_wifi_up) {
+    g_wifi_up = up;
+    if (up) {
+      log_i("Rover online at ws://%s:%u/ (protocol v%d, fw %s)",
+            WiFi.localIP().toString().c_str(), CONTROL_WS_PORT, protocol::kVersion,
+            FIRMWARE_VERSION);
+    } else {
+      // Nothing to do about the motors here: no commands are arriving, so the failsafe
+      // has already cut them. This line exists so the reason is on the record.
+      log_w("Wi-Fi lost — retrying; the failsafe has already stopped the motors");
+    }
+    return;
+  }
+
+  if (!up && (now - g_wifi_attempt_ms) >= WIFI_RETRY_INTERVAL_MS) {
+    beginWifi(now);
+  }
+}
+
+// ---- Status LED ----------------------------------------------------------------------
+//
+// On battery there is no serial monitor, so this is the whole of the rover's ability to
+// say what it is doing. Four states, chosen so the two that matter most in the arena are
+// the two that cannot be mistaken for each other: a rover that cannot find the network
+// flickers, and a rover whose motors are live is steady.
+//
+//     fast flicker   120 ms on, 120 ms off   hunting for the AP — check secrets.h, range
+//     brief pulse     80 ms on, 1420 ms off  associated, waiting for a console
+//     even blink     500 ms on, 500 ms off   console linked, safe — not armed
+//     solid on                               ARMED: a command can move the rover now
+//
+// Anything else — dark, or a repeating boot flicker — is the board resetting, which on
+// battery usually means the supply is sagging under motor current rather than a firmware
+// fault (docs/power-budget.md 3.2).
+
+struct BlinkPattern {
+  uint16_t on_ms;
+  uint16_t period_ms;
+};
+
+BlinkPattern statusPattern() {
+  if (!g_wifi_up) return {120, 240};
+  if (g_state == safety::State::Armed) return {1000, 1000};
+  if (g_failsafe.inputs().connected) return {500, 1000};
+  return {80, 1500};
+}
+
+void serviceStatusLed(uint32_t now) {
+  const BlinkPattern pattern = statusPattern();
+  const bool on = (now % pattern.period_ms) < pattern.on_ms;
+  digitalWrite(PIN_STATUS_LED, on ? HIGH : LOW);
+}
+
+}  // namespace
+
+void setup() {
+  // Motor pins first, before anything that can take time. GPIO14 is a bootstrap pin and
+  // the ROM loader drives it while the board comes up, so the drive enable is briefly
+  // outside this firmware's control on every reset; this is the earliest point at which
+  // it can be pulled down and the motors made safe.
+  g_drive.begin();
+
+  pinMode(PIN_STATUS_LED, OUTPUT);
+  digitalWrite(PIN_STATUS_LED, LOW);
+
+  Serial.begin(115200);
+
+  // Order matters here, and it is narrower than it looks. The server must come up:
+  //
+  //   * AFTER the first WiFi call, because that is what initialises lwIP. Calling
+  //     g_server.begin() first aborts the board in setup() with
+  //     "assert failed: tcpip_send_msg_wait_sem ... (Invalid mbox)" — a socket asked for
+  //     before the TCP/IP task exists — and the panic reboots, so the symptom is a boot
+  //     loop rather than a message.
+  //   * BEFORE association completes, because association is not waited for any more.
+  //     A server started only on a successful join would never start at all on a rover
+  //     that came up out of range.
+  //
+  // beginWifi() satisfies the first by calling WiFi.mode()/WiFi.begin(); it does not
+  // block, so the second is free. The listening socket binds to INADDR_ANY and simply
+  // has no callers until an address arrives.
+  beginWifi(millis());
 
   g_server.begin();
   g_server.onEvent(onWebSocketEvent);
@@ -252,6 +365,9 @@ void loop() {
   g_server.loop();
 
   const uint32_t now = millis();
+
+  serviceWifi(now);
+  serviceStatusLed(now);
 
   // A console that never identifies itself is treated as an unknown protocol version
   // (docs/protocol.md 5). Nothing could have armed in the meantime — Safety refuses to

@@ -101,6 +101,11 @@ FRONT_OVERHANG = 0.035
 # width. Step 0.2 compares against 1.4 m *minus* this, twice over.
 DRESSING_DEPTH = 0.05
 
+# 3S LiPo. A 3S pack is no longer viable -- step 1.3 fitted a DRV8833 whose V_M maxes at
+# 10.8 V, and docs/power-budget.md 3.3 recommends 2S instead, which would make these 8.4
+# and 6.6. Not changed yet: the pack is decision 1 at 0.3's review gate. When it is taken,
+# these move together with BATTERY_LOW_V / BATTERY_CRITICAL_V in console/scripts/console.gd
+# and BATTERY_DIVIDER_RATIO in firmware/include/config.h.
 BATTERY_FULL_V = 12.6  # 3S LiPo, charged
 BATTERY_EMPTY_V = 10.5
 IDLE_DRAIN_FRACTION = 0.2  # idle current as a fraction of full-throttle current
@@ -169,8 +174,13 @@ class DriveModel:
 # Both breakaway figures rose at S.15, and not because the ground changed. An L293D drops
 # ~1.8-2 V against a MOSFET bridge's ~0.5 V, so on a 6 V rail the motor sees about 4 V and
 # needs roughly 6/4 of the duty to make the same torque (docs/chassis-envelope.md 8.3).
-# One driven axle instead of four driven wheels pushes the same way. Still a guess — step
-# 1.5 measures it on real sand and feeds it back through --breakaway.
+# One driven axle instead of four driven wheels pushes the same way.
+#
+# That justification is void as of step 1.3: the driver is now a DRV8833 dropping ~0.36 V,
+# and the rear axle has two motors on it rather than one. Both push these figures back
+# DOWN. They are left as they are on purpose -- step 1.5 measures breakaway on real sand
+# and feeds it back through --breakaway, and a second guess is not better than the first.
+# Keep these in step with MIN_EFFECTIVE_THROTTLE in console/scripts/rover_link.gd.
 SURFACES = {
     "sand": DriveModel(
         name="sand",
@@ -622,9 +632,14 @@ class Rover:
             self.bumped = True
 
         # The steering motor is a real load too, and a held turn parks it against its end
-        # stop — a continuous stall, which is the case most likely to trouble the L293D's
-        # 600 mA channel rating (docs/chassis-envelope.md 8.3). Counted at half the drive
-        # motor's weight, which is a guess step 1.7 replaces with a meter reading.
+        # stop -- a continuous stall. Step 1.3 removed the steering PWM (full voltage is
+        # what it takes to shift the axle against its return spring), so that stall is at
+        # FULL rail voltage: docs/power-budget.md finding F6 puts it at ~2.0 A against a
+        # 1.5 A RMS bridge rating, and at about a fifth of the whole session's energy.
+        #
+        # Counted here at half the drive motor's weight, which now looks too LIGHT -- the
+        # power budget makes it comparable to both drive motors together. Left alone until
+        # step 1.4 puts a meter on it rather than swapped for a second guess.
         load = abs(throttle) + 0.5 * (1.0 if target_angle else 0.0)
         drain_per_s = (BATTERY_FULL_V - BATTERY_EMPTY_V) / (self.battery_minutes * 60.0)
         self.battery_v = max(

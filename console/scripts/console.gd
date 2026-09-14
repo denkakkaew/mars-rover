@@ -32,6 +32,13 @@ const MIN_TOUCH_MM := 15.0
 ## 3S LiPo. Below LOW the operator should be finishing up; below CRITICAL the pack is
 ## into the region where cells start being damaged. Both are provisional until the
 ## divider is calibrated against a meter in step 1.7.
+##
+## ⚠️ **A 3S pack is no longer viable**: step 1.3 fitted a DRV8833, whose V_M maxes at
+## 10.8 V against 3S's 12.6 V charged. docs/power-budget.md §3.3 recommends **2S**, which
+## would make these 7.2 and 6.8. Not changed here because the pack is decision 1 at 0.3's
+## review gate and has not been taken. When it is, these two move together with
+## BATTERY_FULL_V / BATTERY_EMPTY_V in tools/fake_rover.py and BATTERY_DIVIDER_RATIO in
+## firmware/include/config.h — four constants and one resistor pair, all or nothing.
 const BATTERY_LOW_V := 11.1
 const BATTERY_CRITICAL_V := 10.5
 

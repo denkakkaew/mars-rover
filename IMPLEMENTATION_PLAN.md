@@ -125,8 +125,8 @@ Consequences that shape the work below:
 | S.15 | ✅ Simulator and console onto the steered model | 💻 | M | R5 |
 | **0 — Approval & procurement** | | | |
 | 0.1 | ⏸ Fix the sensing spec *(was: the RFID spec)* — **held behind 2.0** | 📋 | M | R2 |
-| 0.2 | ✅ Chassis chosen — **2-motor steered kit, L293D**; candidates rejected | 📋 | M | R5 |
-| 0.3 | Power budget estimate and rail plan | 📋 | M | R4 |
+| 0.2 | ✅ Chassis chosen — **3-motor steered kit** (2 drive, 1 steer); candidates rejected. Driver swapped L293D → **DRV8833** at 1.3 | 📋 | M | R5 |
+| 0.3 | Power budget estimate and rail plan — **re-estimated 2026-08-18**, awaiting decisions | 📋 | M | R4 |
 | 0.4 | Bill of materials — **drive, vision and console only** | 📋 | L | — |
 | 0.5 | Arena and Wi-Fi infrastructure plan *(UHF items moved to 0.6)* | 📋 | M | R6 |
 | 0.6 | ⏸ Bill of materials — sensing — **held behind 2.0** | 📋 | M | R2 |
@@ -341,8 +341,10 @@ S.7 are unchanged by the extra command traffic.
 
 ## Steered-chassis rework (S.14 – S.15) — forced by the 0.2 decision, 2026-08-13
 
-Step 0.2 chose a chassis with **one drive motor and one steering motor**, not a differential
-platform. Phase S was built end to end on skid steer, so this is the same kind of retarget
+Step 0.2 chose a chassis with **one throttle and one steering angle**, not a differential
+platform. (Recorded here as "one drive motor"; the rear axle turns out to have two, driven
+together off one bridge, which changes nothing above the wire.) Phase S was built end to end
+on skid steer, so this is the same kind of retarget
 S.9–S.11 were for Revision 2: not new scope, but the software catching up with a decision
 that has already been taken.
 
@@ -384,6 +386,12 @@ Still no hardware and no spend. Both steps are doable today.
    motors will now whine audibly — a deliberate trade.
 5. `config.h` — real pin names for the L293D, and LEDC channel assignment (0 = drive,
    1 = steer, mast servos still need their own).
+
+> ⚠️ *Items 4 and 5 were both undone at step 1.3, and this list is kept as the record of what
+> S.14 was asked to do rather than of current state. The DRV8833 that replaced the L293D
+> switches to 250 kHz, so `kPwmFrequencyHz` is **back at 20 kHz**; and it has no enable pin, so
+> LEDC channels **0 and 1 are both the drive bridge** while the steering bridge takes no PWM at
+> all. See 1.3 below.*
 6. Document **what `steer` means when the rover is stationary** — the wheels turn, but the
    rover does not move until throttle is applied. The pad has to be honest about that.
 7. Record the one piece of **good news in the failsafe**: three-position steering springs
@@ -417,6 +425,9 @@ commands the rover cannot honour.
    `PROTOCOL_VERSION` to 2. The S.13 speed modes, throttle shaping and nudges carry over
    unchanged in spirit; **re-check the throttle floor**, since it was measured against a
    skid-steer model and an L293D's voltage drop makes the real floor higher, not lower.
+   > ⚠️ *That argument is void as of step 1.3 — the DRV8833 drops ~0.36 V, not ~2 V. S.15 raised
+   > `MIN_EFFECTIVE_THROTTLE` from 0.32 to 0.45 on this reasoning alone, so **0.45 is now
+   > unsupported and probably too high**. It is measured on sand at 1.5, not re-guessed here.*
 4. `console.gd` and the scene — LEFT and RIGHT now **steer while driving** rather than pivot.
    Decide what they should do when the rover is stopped, and make the pad honest about it.
    Re-run the touch audit.
@@ -494,6 +505,11 @@ swept-circle arithmetic, a to-scale corridor drawing, and a keep-out sensitivity
 
 **Chosen:** an AliExpress kit (item `1005008274445888`) with **two DC motors — one drive, one
 steering** — through an **L293D**, PWM speed control. Plus a scope ruling: **free drive**.
+
+> ⚠️ **Two corrections to this record.** The kit has **three** 130-class motors, not two —
+> **two** on the rear axle and one steering (noted 2026-08-18); and the **L293D was replaced by
+> a DRV8833 at step 1.3** on 2026-08-13. Neither changes the decision this block records, but
+> both change everything downstream of it. See 1.3 and [power-budget.md](docs/power-budget.md).
 Rocks are scattered at random, the operator drives to them by hand, and **precision
 positioning is not a design goal for this build.**
 
@@ -523,12 +539,14 @@ the free-drive ruling means the millimetre-alignment case it served no longer ap
 
 **Do:**
 1. Tabulate worst-case current per subsystem from datasheets. *Much smaller servo load than
-   Revision 1 — two mast servos instead of an arm's four or five — but note that servo
-   **stall** current still sizes that rail.* Two motors now, not four (0.2).
-2. **Size the motor rail with the L293D's voltage drop included** — roughly 1.8–2 V across
-   the bridge, against ~0.5 V for a MOSFET part. A 6 V motor needs about 8 V at the driver
-   input to see its rated voltage, so the pack and regulator have to carry that overhead or
-   the rover will be slower and weaker than the motor spec suggests.
+   Revision 1 — **four** SG90s (mast pan/tilt ×2, camera pan/tilt ×2) instead of an arm's four
+   or five plus a mast — but note that servo **stall** current still sizes that rail.*
+   **Three** motors now, not four and not two (0.2, corrected 2026-08-18).
+2. **Size the motor rail against the DRV8833, not the L293D** — the ~2 V bridge drop the
+   original version of this step told you to carry is gone as of 1.3, and with it the reason
+   for an 8 V motor rail. The drop is now ~0.36 V, `V_M` maxes at **10.8 V**, and the pack
+   lands on the motor essentially undivided, so the rail wants regulating to *cap* motor
+   voltage rather than to raise it.
 3. Carry a **sensing allowance** rather than a specific part, since 2.0 has not run. Size it
    against the hungriest candidate — a UHF reader draws a meaningful, *bursty* current while
    transmitting; a probe arm's servos are dominated by **stall**, not by their running draw.
@@ -539,17 +557,35 @@ the free-drive ruling means the millimetre-alignment case it served no longer ap
    the runtime demand is higher than a single collect-and-return (revised R4).
 
 **Delivered:** [docs/power-budget.md](docs/power-budget.md) — the load table, the four-rail
-plan, session energy arithmetic, a candidate-independent sensing allowance, and two findings:
+plan, session energy arithmetic, a candidate-independent sensing allowance, and four findings.
 
-- **F5 🔴 `BATTERY_DIVIDER_RATIO = 2.0` would destroy the ADC pin** at step 1.1 — 6.3 V onto a
-  3.6 V absolute maximum. Recommends 100k/27k, ratio 4.70.
-- **F6 🔴 the steering channel is the binding constraint on the L293D, thermally.** A held turn
-  is a *continuous* stall; ~1.8 W in a DIP-16 with θ_JA ≈ 67 °C/W puts the junction near its
-  limit, and the realistic failure is thermal shutdown cutting out mid-turn.
+#### 🔄 Re-estimated 2026-08-18, before the gate was ever passed
 
-**Review gate:** the rail diagram and the current table, plus the four decisions in its §7 —
-pack choice, session length, whether the motor rail is regulated, and whether to buy a
-TB6612FNG alongside the L293D. ⛔ Stop for approval.
+The first draft was written against the parts believed fitted on 2026-08-13, and three of those
+beliefs were wrong: the driver (1.3 swapped the L293D for a DRV8833 and deleted the steering
+PWM), the drive motor count (**two**, not one), and the servo count (**four**, not two). Its §0
+tables the changes. Headline movement: session average 6.0 W → **7.1 W**, realistic-worst pack
+draw 1.4 A → **6.2 A**, and the pack recommendation reverses from **3S + 8 V buck** to
+**2S + 6 V buck** — 3S is now destructive rather than merely wasteful.
+
+- **F5 🔴 `BATTERY_DIVIDER_RATIO = 2.0` would destroy the ADC pin** — 4.2 V onto a 3.6 V
+  absolute maximum against a 2S pack (6.3 V against 3S). A smaller pack shrinks the overshoot
+  but does not retire the finding. Recommends **100k/47k, ratio 3.13**.
+- **F6 🔴 held steering is a continuous stall at *full* rail voltage.** ⚠️ **1.3 recorded this
+  as "largely dissolved by the part change"; that was half right.** The same step deleted
+  `kSteerHoldDuty`, so the load went from 70% duty to 100% at the moment the driver improved,
+  and the two were never multiplied together. ~2.0 A continuous against a 1.5 A RMS bridge
+  rating, ~1.44 W in one bridge, and the realistic failure is still the driver cutting out
+  mid-turn. **Measured at 1.4, not 1.7.**
+- **F8 🟠 three motors, two bridges.** The drive pair must share bridge A at double the
+  current. A wiring and rail-sizing finding, not a software one — `fwd` still maps to one
+  bridge, and a steered chassis should not have independent rear wheels.
+- **F9 🟠 the L293D's 2 V drop was doing hidden work** — absorbing pack excess and limiting
+  stall current. Removing the defect removed both benefits.
+
+**Review gate:** the rail diagram and the current table, plus the five decisions in its §7 —
+pack choice, session length, drive motors in parallel or series (F8), what to do about F6, and
+metering the 130 motors' armature resistance before 0.4 buys anything. ⛔ Stop for approval.
 
 ---
 
@@ -848,11 +884,23 @@ pack after its ~2 V bridge drop, and nothing moved usefully. Replaced with a **D
   standby pin makes `stop()` a hardware disable of both bridges — protocol.md §3.3 updated,
   since it claimed the driver had none.
 
-**Phase 0 consequences to fold in when 0.3 is decided:** finding **F6** (L293D thermal limit
-on held steering) is largely dissolved by the part change; but `VM` maxes at **10.8 V**, so the
-3S pack 0.3 recommended would destroy this board. The reason for that recommendation also
-evaporates — the 8 V buck existed to overcome a 2 V drop that no longer exists — so **2S direct
-is now the strong candidate.**
+**Phase 0 consequences to fold in when 0.3 is decided:** `VM` maxes at **10.8 V**, so the 3S
+pack 0.3 recommended would destroy this board. The reason for that recommendation also
+evaporates — the 8 V buck existed to overcome a 2 V drop that no longer exists — so **2S is now
+the strong candidate.** Finding **F6** (thermal limit on held steering) looks largely dissolved
+by the part change.
+
+> 🔴 **Correction, 2026-08-18 — F6 is not dissolved, and "2S *direct*" is not safe either.**
+> The claim above assessed the driver change and the steering change separately. Deleting
+> `kSteerHoldDuty` took the steering from 70% duty to **100% duty at full rail voltage** in the
+> same commit that improved the driver, so the load grew as the part did: ~2.0 A continuous
+> against a 1.5 A RMS bridge. And the 2 V drop that vanished was also *absorbing pack excess* —
+> 2S direct puts 8.0 V on a 3–6 V motor at full charge (power-budget **F9**). Both are worked
+> through in the 2026-08-18 re-estimate of [power-budget.md](docs/power-budget.md), which
+> recommends **2S behind a 6 V buck** rather than 2S direct.
+>
+> Also corrected there: the chassis has **two** drive motors, not one — this bench session spun
+> a single motor, and a DRV8833 has only two bridges for three motors (**F8**).
 
 ---
 
@@ -860,21 +908,40 @@ is now the strong candidate.**
 **Goal:** left is left, and forward is forward.
 **Owner:** 🔧💻 · **Size:** M · **Depends on:** 1.3
 
-*Rewritten at the 0.2 decision: this chassis has one drive motor and one steering motor, not
-four motors on two sides.*
+*Rewritten at the 0.2 decision: this chassis has drive motors and one steering motor, not four
+motors on two sides. Rewritten again 2026-08-18: there are **three** motors, not two, and the
+driver is the **DRV8833** fitted at 1.3.*
 
-**Do:** wire both motors through the L293D; verify the drive motor's polarity so a positive
-`fwd` drives forward, and the steering motor's so a negative `steer` goes **left**; add a
-per-motor inversion flag in `config.h` rather than swapping physical wires; check both LEDC
-channels are independent and that neither collides with a channel reserved for the mast servos
-later. Confirm the §6.1 spring-centre property survives real wiring — cut power at full lock
-and watch the axle return.
+**Do:** wire all three motors through the DRV8833 — the **two drive motors paralleled on
+bridge A**, the steering motor on bridge B (power-budget **F8**). Verify the drive polarity so
+a positive `fwd` drives forward and both drive wheels turn the *same* way, and the steering
+polarity so a negative `steer` goes **left**; add a per-motor inversion flag in `config.h`
+rather than swapping physical wires. Check that no LEDC channel collides with one reserved for
+the Phase 3 servos, of which there are now **four**. Confirm the §6.1 spring-centre property
+survives real wiring — cut power at full lock and watch the axle return.
 
-**Verify:** `{"cmd":"drive","fwd":1,"steer":0}` drives forward; `steer:-1` swings the axle
-fully left and `steer:0` lets it spring back to centre.
+**Also measure here, because the 0.3 re-estimate is blocked on it and 1.7 is too late:**
 
-**Review gate:** video of the drive wheel and the steering axle for each of the five drive-pad
-commands. ⛔ Stop for approval.
+- **Armature resistance** of one 130 motor — ohms across the terminals, shaft held, highest of
+  a few brush positions. Every stall figure in the power budget is `V_rail / R` and the whole
+  document is computed at an *assumed* 3.0 Ω (power-budget §2.1).
+- **How the kit wires the drive pair** — parallel or series — with a meter, before power. Some
+  kits ship them soldered in series inside the gearbox, which quarters the stall current and
+  halves the speed (**F8**).
+- **Steering current with the axle held at lock**, against the DRV8833's 1.5 A RMS per-bridge
+  rating, and **the module's temperature after 30 s of held lock** with a thermometer on it.
+  This is **F6**, the open finding with teeth.
+- **Whether a reduced duty can *hold* the axle at lock once full voltage has *reached* it.**
+  1.3 established that a PWM-limited channel cannot shift the axle; reaching and holding are
+  different mechanical problems and only the first was tested. If a kick-then-hold profile
+  works it is the cheapest F6 mitigation — and it wants a name that cannot be mistaken for
+  `kSteerHoldDuty` coming back.
+
+**Verify:** `{"cmd":"drive","fwd":1,"steer":0}` drives both wheels forward; `steer:-1` swings
+the axle fully left and `steer:0` lets it spring back to centre.
+
+**Review gate:** video of the drive wheels and the steering axle for each of the five drive-pad
+commands, plus the four measurements above. ⛔ Stop for approval.
 
 ---
 
@@ -937,11 +1004,15 @@ drive case for a steered chassis), and stall; log pack voltage over a sustained 
 real runtime; calibrate the `BATTERY_DIVIDER_RATIO` constant against a meter so the telemetry
 reading is true.
 
-**Added at the 0.2 decision:** compare measured stall current against the **L293D's 600 mA
-per-channel continuous rating**. A drive motor pushing through sand can exceed it, and a
-steering motor held against its end stop certainly will. If either does, the driver is
-undersized and a TB6612FNG-class part is the fix — better found here than after the arena is
-dressed.
+**Added at the 0.2 decision, revised 2026-08-18:** compare measured stall current against the
+**DRV8833's 1.5 A RMS per-bridge rating** (the plan's 1.3 notes say 1.2 A — resolve which from
+the module's own listing at 0.4). Two drive motors *paralleled on one bridge* pushing through
+sand can exceed it, and a steering motor held against its end stop certainly will. Note that
+the driver's overcurrent protection means the symptom is the bridge cutting out and retrying,
+not a dead part — so watch for intermittent drive loss, not smoke.
+
+The steering side of this is finding **F6** and moves earlier, to **1.4** — 1.7 is too late,
+because 1.4 is the first step that holds steering under power for any length of time.
 
 **Verify:** measured runtime comfortably exceeds a **full multi-rock session**, with margin
 for the mast servos and for 0.3's sensing allowance, neither of which is fitted yet.

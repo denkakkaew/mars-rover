@@ -100,8 +100,16 @@ const SPEED_SCALE := {
 ## MOSFET bridge. The chosen L293D drops ~1.8-2 V against that part's ~0.5 V, so on a 6 V
 ## rail the motor sees about 4 V and needs roughly 6/4 of the duty for the same torque
 ## (docs/chassis-envelope.md 8.3) — about 0.42, and one driven axle instead of four
-## driven wheels pushes the same way. Still **provisional until step 1.5 drives on real
-## sand**, which is where the real number comes from.
+## driven wheels pushes the same way.
+##
+## ⚠️ **That justification is void as of step 1.3.** The L293D was replaced by a DRV8833,
+## which drops ~0.36 V rather than ~2 V, so the 6/4 duty penalty this number was raised
+## for does not exist. Pushing back the other way: the rear axle turns out to have *two*
+## motors on it, not one, which shares the torque. **0.45 is therefore unsupported and
+## most likely too high** — but it is not re-guessed here, because guessing is what got
+## it wrong. Step 1.5 drives on real sand and measures breakaway; that is the number.
+## Left deliberately conservative until then: too high wastes low-speed control, too low
+## leaves the rover stuck in its own ruts with the pad appearing to respond.
 const MIN_EFFECTIVE_THROTTLE := 0.45
 
 ## Above the floor, response is curved rather than linear so that most of the pad's
@@ -119,7 +127,12 @@ const NUDGE_SEC := 0.35
 signal speed_mode_changed(mode: Speed)
 signal nudge_state_changed(running: bool)
 
-@export var rover_url := "ws://192.168.4.1:81/"
+## The rover's fixed address on the arena network — it must match ROVER_STATIC_IP in
+## firmware/include/config.h, which is what makes it predictable enough to commit here.
+## (It was 192.168.4.1 while no rover existed; that is the ESP32's *soft-AP* address, and
+## this firmware joins an existing network as a station instead, so it never had it.)
+## Override with ROVER_URL to reach the simulator or a rover on a different network.
+@export var rover_url := "ws://192.168.1.50:81/"
 @export var auto_connect := true
 
 var state: State = State.DISCONNECTED

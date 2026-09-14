@@ -32,10 +32,8 @@ namespace {
 /// desk. Every command restarts this.
 constexpr uint32_t AUTO_STOP_MS = 5000;
 
-Drive g_drive(
-    {PIN_DRIVE_IN1, PIN_DRIVE_IN2, LEDC_CHANNEL_DRIVE_IN1, LEDC_CHANNEL_DRIVE_IN2},
-    {PIN_STEER_IN1, PIN_STEER_IN2},
-    PIN_MOTOR_STANDBY);
+Drive g_drive({PIN_DRIVE_IN1, PIN_DRIVE_IN2, LEDC_CHANNEL_DRIVE_IN1, LEDC_CHANNEL_DRIVE_IN2},
+              {PIN_STEER_IN1, PIN_STEER_IN2});
 
 float g_throttle = 0.0f;
 float g_steer = 0.0f;
@@ -73,16 +71,21 @@ void stopAll(const char *why) {
 void pinWalk() {
   struct Entry { const char *name; uint8_t pin; };
   const Entry entries[] = {
-      {"AIN1 drive", PIN_DRIVE_IN1}, {"AIN2 drive", PIN_DRIVE_IN2},
-      {"BIN1 steer", PIN_STEER_IN1}, {"BIN2 steer", PIN_STEER_IN2},
-      {"STBY      ", PIN_MOTOR_STANDBY},
+      {"L293D   1A+3A  drive fwd", PIN_DRIVE_IN1},
+      {"L293D   2A+4A  drive rev", PIN_DRIVE_IN2},
+      {"DRV8833 AIN1   steer R  ", PIN_STEER_IN1},
+      {"DRV8833 AIN2   steer L  ", PIN_STEER_IN2},
   };
 
   Serial.println("\n  pin walk — each output goes HIGH for 2 s, in order.");
   Serial.println("  Meter each one against GND. Disconnect the motors first.\n");
 
-  // Only the drive bridge is on LEDC; detach it so digitalWrite works. The steering pins
-  // are already plain outputs.
+  // Both drive inputs are on LEDC since the enables went to VCC; detach them so
+  // digitalWrite works. The steering pins are already plain outputs.
+  //
+  // This walk is the fastest way to catch a repeat of the GPIO26 failure that forced the
+  // 2026-08-30 pin move: a healthy output meters ~3.3 V here, and anything markedly below
+  // that with the motors disconnected is a damaged pin, not a firmware problem.
   ledcDetachPin(PIN_DRIVE_IN1);
   ledcDetachPin(PIN_DRIVE_IN2);
 
@@ -186,13 +189,14 @@ void setup() {
 
   Serial.println();
   Serial.println("=== Mars rover — motor bench test (step 1.3) ===");
-  Serial.println("driver DRV8833 — PWM on the input pins, no enable pin");
-  Serial.printf("drive  AIN1 GPIO%-2d (LEDC %d)   AIN2 GPIO%-2d (LEDC %d)\n",
+  Serial.println("drive  L293D,   both enables to VCC — PWM on the inputs, 1.5 kHz");
+  Serial.println("steer  DRV8833, STBY to VCC        — no PWM, three positions");
+  Serial.printf("drive  1A+3A GPIO%-2d (LEDC %d)   2A+4A GPIO%-2d (LEDC %d)\n",
                 PIN_DRIVE_IN1, LEDC_CHANNEL_DRIVE_IN1,
                 PIN_DRIVE_IN2, LEDC_CHANNEL_DRIVE_IN2);
-  Serial.printf("steer  BIN1 GPIO%-2d   BIN2 GPIO%-2d   (no PWM — full voltage or off)\n",
+  Serial.printf("steer  AIN1  GPIO%-2d            AIN2  GPIO%-2d\n",
                 PIN_STEER_IN1, PIN_STEER_IN2);
-  Serial.printf("stby   GPIO%d — HIGH while driving, LOW on stop\n", PIN_MOTOR_STANDBY);
+  Serial.println("600 mA per L293D channel, one drive motor each — still watch for heat.");
   Serial.println();
   Serial.println("Motors should be FREE-SPINNING, wheels off, chassis nowhere near this.");
   help();
