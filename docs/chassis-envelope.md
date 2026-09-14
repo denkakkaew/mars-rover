@@ -3,9 +3,12 @@
 > ## ⛔ Decision, 2026-08-13: all four candidates below were rejected
 >
 > The chassis chosen instead is an AliExpress kit (item `1005008274445888`) with a
-> **fundamentally different drive architecture**: **two DC motors — one for
-> forward/backward, one for steering left/right** — driven through an **L293D**, with speed
-> set by PWM.
+> **fundamentally different drive architecture**: **DC motors for forward/backward and one
+> for steering left/right**, with speed set by PWM.
+>
+> *Corrected 2026-08-18: the kit has **three** 130-class motors, not two — **two** driving the
+> rear axle and one steering. Corrected 2026-08-13 at step 1.3: the driver is a **DRV8833**,
+> not the L293D recorded here. See §8.3.*
 >
 > **That is not skid steer.** Everything from §1 down assumes a differential platform that
 > pivots about its own centre, and a steered chassis cannot do that at all. The swept-circle
@@ -257,30 +260,37 @@ the worst way, silently. A v1 console sending `l`/`r` at a v2 rover would have b
 ignored and default to zero (v1 §3.2 makes them optional), so the console would look like it
 was driving while the rover sat still. The handshake exists precisely to catch this.
 
-### 8.3 The L293D is the weakest of the three drivers, in two specific ways
+### 8.3 The L293D was the weakest of the three drivers — ✅ resolved at 1.3, and replaced
 
-Not a veto — it is a legitimate choice for two small motors, and it is what has been decided.
-But two things need checking rather than assuming:
+*Original finding, 2026-08-13: the L293D is rated 600 mA continuous per channel (1.2 A peak),
+which a geared drive motor pushing through sand can exceed and a stall certainly will; and it
+is a bipolar Darlington part dropping roughly **1.8–2 V** across the bridge, so on a 6 V rail
+the motor would see about 4 V. Both were flagged for checking rather than assuming.*
 
-- **Current.** L293D is rated **600 mA continuous per channel** (1.2 A peak). A geared drive
-  motor pushing through sand can exceed that, and stall current certainly will. `CLAUDE.md`'s
-  target architecture named TB6612FNG (1.2 A continuous, 3.2 A peak) or L298N. **Measure stall
-  current at step 1.7** and compare against 600 mA before committing the arena to it.
-- **Voltage drop.** L293D is a bipolar Darlington part and drops roughly **1.8–2 V** across the
-  bridge, against ~0.5 V for a TB6612FNG. On a 6 V rail the motor sees about 4 V, so it will
-  be noticeably slower and weaker than its rating suggests. Size the motor rail at 0.3 with
-  that drop included.
+**Both were confirmed on the bench, and the part was replaced the same day.** The L293D left
+only ~2.9 V at the motor from the 4.8 V bench pack and nothing moved usefully. **The driver is
+now a DRV8833** — ~0.36 V drop, 1.5 A RMS per bridge, 3.3 V logic with no separate logic
+supply, and a standby pin the L293D lacked. The same pack now delivers ~4.6 V to the motor.
 
-### 8.4 The PWM frequency in `lib/Drive` is wrong for an L293D
+Three things that finding did *not* anticipate, all in
+[power-budget.md](power-budget.md):
 
-`Drive.cpp` sets `kPwmFrequencyHz = 20000`, chosen to keep motor whine above the audible band.
-**An L293D cannot switch cleanly at 20 kHz** — it is a slow Darlington device, and the usual
-guidance is to stay at or below a few kHz. At 20 kHz most of the duty cycle is spent in the
-transition, wasting power as heat and giving poor low-speed torque, which is exactly the
-region the S.13 throttle floor cares about.
+- **`V_M` maxes at 10.8 V**, which rules out the 3S pack the first power budget recommended.
+- **The 2 V of drop was doing hidden work** — absorbing pack excess and limiting stall current.
+  Removing the defect removed both benefits (finding **F9**).
+- **A DRV8833 has two bridges and the rover has three motors**, so the drive pair shares
+  bridge A at double the current (finding **F8**).
 
-**Drop it to ~1–2 kHz**, and accept that the motors will whine audibly. That is a real
-trade-off to make deliberately rather than discover on the bench.
+### 8.4 The PWM frequency in `lib/Drive` — ✅ resolved at 1.3, and reverted
+
+*Original finding, 2026-08-13: `Drive.cpp` set `kPwmFrequencyHz = 20000` to keep motor whine
+above the audible band, and an L293D cannot switch cleanly up there. Recommended ~1–2 kHz,
+accepting audible whine as a deliberate trade.*
+
+S.14 acted on it and dropped the frequency to 1.5 kHz. **Step 1.3's driver change refunded it:
+the DRV8833 switches to 250 kHz, so `Drive.cpp` is back at 20 kHz**, the deliberate whine is
+gone, and the low-speed torque the S.13 throttle floor depends on improved. The trade this
+section asked you to make deliberately turned out not to need making.
 
 ### 8.5 The steering is three-position, not proportional
 
@@ -288,7 +298,7 @@ Confirmed 2026-08-13: the steering motor drives to a **mechanical end stop**, wi
 recentring it when unpowered. There is no intermediate angle — the rover goes straight, or it
 turns at full lock.
 
-Three consequences, and the first is the one that matters:
+Four consequences, and the first is the one that matters:
 
 - **You cannot make a small heading correction.** S.12 measured the rover curving several
   degrees per metre under its own drive asymmetry, and the only correction available is a
@@ -298,9 +308,18 @@ Three consequences, and the first is the one that matters:
 - **The failsafe centres the steering for free.** Cutting power lets the spring recentre, so a
   rover that fails safe mid-turn coasts straight rather than continuing to arc into the glass.
   That is a genuine safety property worth writing into the contract — and worth confirming at
-  1.3, because a weak or missing spring quietly removes it.
+  1.3, because a weak or missing spring quietly removes it. ✅ **Confirmed on hardware at step
+  1.3**: the axle springs back to centre on release.
 - **The console maps onto it cleanly.** Hold-to-drive already means "press for as long as you
   want this"; hold-LEFT / release-to-centre is the same gesture, and needs no new control.
+- **Holding a turn is a continuous motor stall, at full rail voltage.** ⚠️ Added 2026-08-18.
+  The axle sits against its end stop for as long as the operator holds the button, and step 1.3
+  established that it takes *full* voltage to get there — a PWM-limited steering channel could
+  not shift the axle against the return spring at all, so the duty parameter was removed. The
+  steering motor is therefore the largest instantaneous load on the rover and about a fifth of
+  its session energy at 10% duty. This is finding **F6** in
+  [power-budget.md](power-budget.md), and it is the open one with teeth: 2.0 A continuous
+  against a 1.5 A RMS bridge rating. Measured at 1.4.
 
 ### 8.6 Still true, and worth keeping
 
@@ -308,6 +327,9 @@ Three consequences, and the first is the one that matters:
   chassis class is much lighter-duty than C4. Check it against the kit's stated load limit.
 - **Sand capability** remains the thing most likely to disappoint (§6.1). Small wheels and low
   clearance plough. Now compounded: a steered front axle digs in more readily than a driven
-  one, and there is only *one* driven axle instead of four.
+  one, and there is only *one* driven axle instead of four — though that axle turns out to have
+  **two motors on it, not one** (corrected 2026-08-18), which shares the torque and digs in
+  less than a single-motor axle would.
 - **Mast stability** (§6.3) — a tall pan/tilt mast on a light chassis rings after a fast pan,
-  and R8 makes the mast the only eye.
+  and R8 makes the mast the only eye. The camera now has **its own pan/tilt pair** on top of
+  the mast's, so there is more mass further up than this section assumed.
