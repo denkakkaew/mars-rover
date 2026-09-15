@@ -39,9 +39,23 @@ and gave the console fine-drive modes; **S.14–S.15 retargeted the protocol, fi
 simulator and console onto the steered chassis chosen at 0.2, which is what protocol v2 is.**
 Everything from Phase 0 onward is either your decisions or blocked on procurement.
 
-**Rock identification is on hold** and the sensing method is reopened (see
-[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md), step 2.0) — UHF RFID is one candidate rather
-than a settled decision. Driving is the primary line of work.
+**The sensing method was decided on 2026-09-14 at step 2.0: colour-and-size recognition on a
+second **ESP32-CAM** at the front mounting point — not UHF RFID.** The mast camera is
+unchanged, so the rover carries two camera boards; detection runs **on the detection board** and
+the colour code → element lookup stays **console-side** in `compositions.json`. Fiducial markers
+(ArUco) are the recorded fallback, on an explicit trigger: **step 2.3 failing to reach ≥ 95%
+correct class over 100 detections.** Steps 2.1–2.7 are replaced one-for-one; the RFID versions
+are retained in the plan as history. **No protocol change** — the `tag` frame carries a colour
+code where it carried an EPC. The reasoning is at step 2.0 in
+[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) and the power consequences at §6.1–§6.2 of
+[docs/power-budget.md](docs/power-budget.md).
+
+⛔ **The proposal has not caught up.** [plan/storyboard-rev2.md](plan/storyboard-rev2.md) still
+states UHF RFID as decided design in §3, §4.3, §5.2, §5.4, R2 and R7, so it is now *wrong* rather
+than merely open. **Revision 3 is owed before Phase 2 restarts** — R7 retires, R2 becomes lighting
+stability rather than tag orientation, and R8 improves because the second camera comes back.
+
+Driving is still the primary line of work.
 
 - [plan/](plan/) — the proposal documents (see next section)
 - [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) — the ordered build plan, in small steps
@@ -220,8 +234,9 @@ decision:
 - **Control channel** — Godot touchscreen console → ESP32 over Wi-Fi (WebSocket), with
   Bluetooth as fallback. ESP32 drives **two drive motors and one steering motor** (steered
   chassis, chosen at step 0.2 — *not* skid steer; it cannot pivot in place) and **four**
-  pan/tilt servos (mast ×2, camera ×2), polls the RFID reader over UART, and publishes
-  telemetry and tag reads back.
+  pan/tilt servos (mast ×2, camera ×2), and publishes telemetry and tag reads back. **Since 2.0
+  (2026-09-14) the identification sensor is a second ESP32-CAM, not a UART reader** — it does
+  its own detection and reports a colour code, so the control ESP32 relays rather than polls.
 
   **Two driver chips, split by function** (2026-08-30). The **drive** motors are on an
   **L293D**, one motor per channel — front on output A, rear on output B — which is what
@@ -242,19 +257,25 @@ decision:
 Video never shares the control channel, so streaming load cannot make driving laggy. Any
 proposed change that merges them contradicts the design rationale in proposal §5.5 and risk R1.
 
-**There is no robotic arm.** The front mounting point carries the RFID antenna instead. Tag
-reads travel reader → ESP32 → console alongside telemetry; the **console**, not the rover,
-turns a tag ID into a displayed composition, so the lookup table can be edited without
-reflashing.
+**There is no robotic arm.** The front mounting point carries the **detection camera** — a
+second ESP32-CAM, chosen at 2.0 — where Revision 2 had put an RFID antenna. Reads
+travel detector → ESP32 → console alongside telemetry; the **console**, not the rover, turns an
+ID into a displayed composition, so the lookup table can be edited without reflashing. That
+principle is unchanged by 2.0 — only the ID's origin is.
 
-**One camera is a single point of vision** (risk R8) — if the mast head fails, the rover is
-blind. That makes mast pan/tilt reliability higher priority than it was in Revision 1, and the
-head should default to a forward-and-down driving position between surveys.
+**One camera was a single point of vision** (risk R8) — if the mast head failed, the rover was
+blind. That made mast pan/tilt reliability higher priority than in Revision 1, and the head
+should still default to a forward-and-down driving position between surveys. **2.0 improves
+this**: the detection board is a second camera with its own mount and supply, so either can
+serve a degraded driving view. R8 is mitigated, not retired — the two are not interchangeable
+(the detection camera is fixed and forward-facing, with no pan/tilt).
 
 The arena is a sealed 1.4 m × 3.0 m glass box; the rover operates inside, the operator station
 outside. The 1.4 m width constrains chassis footprint and turning radius (risk R5). Glass is
-largely transparent to both 2.4 GHz Wi-Fi and UHF RFID, but that is a checkpoint to verify for
-both bands, not an assumption (risk R6).
+largely transparent to 2.4 GHz Wi-Fi, but that is a checkpoint to verify, not an assumption
+(risk R6). **The UHF half of R6 is retired by 2.0** — nothing on the rover uses that band now.
+What replaces it is not an RF question at all: the detection camera needs **stable arena
+lighting and locked white balance**, and glass reflections are a new hazard for it.
 
 ## Control protocol
 
