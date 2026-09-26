@@ -12,10 +12,16 @@ except for its §2 project rationale, which Revision 2 carries forward unchanged
 **Status: no hardware procured.** Phase S is software groundwork and is doable today.
 Everything from Phase 1 onward is blocked until parts exist.
 
-> ⏸ **Re-prioritised 2026-08-13 — driving first.** Rock identification is **on hold** and the
-> sensing method is **reopened**: UHF RFID is no longer a settled decision, it is one candidate
-> among several. Phase 2 is suspended behind a new decision gate (step 2.0). Phase 1 and the
-> driving half of Phase 3 proceed without it. See the next section.
+> ⏸ **Re-prioritised 2026-08-13 — driving first.** Rock identification was put **on hold** and
+> the sensing method **reopened**: UHF RFID stopped being a settled decision and became one
+> candidate among several. Phase 2 was suspended behind a new decision gate (step 2.0). Phase 1
+> and the driving half of Phase 3 proceed without it. See the next section.
+>
+> ✅ **2.0 landed on 2026-09-14: colour/size recognition on a second ESP32-CAM (candidate C2),
+> with fiducial markers (D) as a fallback on a defined trigger.** Phase 2 is unsuspended and
+> its seven steps are replaced one-for-one; 0.1, 0.6 and 4.1b are unblocked. **Driving is still
+> the primary line of work** — nothing below reorders because of this. The storyboard now owes
+> a Revision 3.
 
 ---
 
@@ -26,8 +32,10 @@ The plan below was written assuming UHF RFID was decided. It no longer is. Nothi
 identifies them is now an open question, and the driving platform is the thing being built
 first regardless of how that question resolves.
 
-**What is on hold:** all of Phase 2, step 0.1, the sensing half of the bill of materials, the
-UHF band and tag-embedding items in 0.5, and Phase 4 (which rehearses Scenes 5–8).
+**What was on hold:** all of Phase 2, step 0.1, the sensing half of the bill of materials, the
+UHF band and tag-embedding items in 0.5, and Phase 4 (which rehearses Scenes 5–8). **2.0 has
+since released all of it** — and retires the 0.5 UHF items outright, since the chosen method
+uses no licensed band. Phase 4 stays blocked on Phase 2 *completing*, not on the decision.
 
 **What proceeds:** Phase S, Phase 1 in full, and Phase 3 minus its sensing dependencies. That
 is a rover that can be driven the length of the arena on one camera feed with no direct
@@ -38,7 +46,10 @@ step 3.7 rather than 4.4.
 the chassis, the power rails and the mast camera are all **identical** under every sensing
 candidate. None of that work is speculative, and none of it has to be redone when the method
 is chosen. The one thing that does depend on the choice is what hangs off the front of the
-rover, which is why 0.2's clearance check carries a placeholder until 2.0 lands.
+rover, which is why 0.2's clearance check carried a placeholder until 2.0 landed. **It has now
+landed** — the front mounting point carries an ESP32-CAM board and its lens, which is smaller
+and lighter than the RFID antenna the placeholder was sized against, so the check is not at
+risk. Confirm the actual projection at 2.5.
 
 **What Phase S already built is not wasted.** The composition table, session log and analysis
 panel from S.11 key off an **ID string** and a **signal strength number**. Every candidate
@@ -50,6 +61,10 @@ states UHF RFID as decided design throughout (§3, §4.3, §5.2, §5.4, R2, R7).
 the storyboard is the authority on the mission, so **it needs a Revision 3 once 2.0 picks a
 method** — not before, since writing it now would just record the same open question twice.
 Until then, treat the storyboard's §4.3 as one candidate rather than the specification.
+
+⛔ **2.0 has now picked one, so Revision 3 is due and is the next thing this plan owes.** Until
+it is written the storyboard is wrong rather than merely open, which is the worse state — §3,
+§4.3, §5.2, §5.4, R2 and R7 all describe a reader and tags that will not be built.
 
 ---
 
@@ -124,12 +139,12 @@ Consequences that shape the work below:
 | S.14 | ✅ Protocol v2 + firmware: throttle and steering, not per-side | 💻 | M | **R5** |
 | S.15 | ✅ Simulator and console onto the steered model | 💻 | M | R5 |
 | **0 — Approval & procurement** | | | |
-| 0.1 | ⏸ Fix the sensing spec *(was: the RFID spec)* — **held behind 2.0** | 📋 | M | R2 |
+| 0.1 | Fix the **vision** spec *(was: the RFID spec)* — **unblocked by 2.0** | 📋 | M | R2 |
 | 0.2 | ✅ Chassis chosen — **3-motor steered kit** (2 drive, 1 steer); candidates rejected. Driver swapped L293D → **DRV8833** at 1.3 | 📋 | M | R5 |
 | 0.3 | Power budget estimate and rail plan — **re-estimated 2026-08-18**, awaiting decisions | 📋 | M | R4 |
 | 0.4 | Bill of materials — **drive, vision and console only** | 📋 | L | — |
 | 0.5 | Arena and Wi-Fi infrastructure plan *(UHF items moved to 0.6)* | 📋 | M | R6 |
-| 0.6 | ⏸ Bill of materials — sensing — **held behind 2.0** | 📋 | M | R2 |
+| 0.6 | Bill of materials — sensing — **unblocked by 2.0; near-empty, the board exists** | 📋 | M | R2 |
 | **1 — Drive platform bring-up** | | | |
 | 1.1 | ✅ ESP32 board sanity — **passed on real hardware** | 🔧💻 | S | — |
 | 1.2 | Wi-Fi join, WebSocket echo, RSSI survey through the glass | 🔧💻 | M | R6 |
@@ -139,26 +154,26 @@ Consequences that shape the work below:
 | 1.6 | Failsafe proving — cut the link mid-drive | 🔧💻 | S | R1 |
 | 1.7 | Current draw measurement per subsystem | 🔧 | M | R4 |
 | 1.8 | Control-latency measurement, idle link | 🔧💻 | S | R1 |
-| **2 — Rock identification** ⏸ **ON HOLD — method not decided** | | | |
-| 2.0 | **Decide the identification method** — the gate that unsuspends this phase | 📋 | M | **R2** |
-| 2.1 | ⏸ Reader bring-up on the bench, off the rover | 🔧💻 | M | — |
-| 2.2 | ⏸ Tag embedding trial and survivability | 🔧 | M | **R7** |
-| 2.3 | ⏸ Read-range characterisation, bare tags | 🔧 | M | R2 |
-| 2.4 | ⏸ Read through rock, sand, and tag orientation | 🔧 | L | **R2** |
-| 2.5 | ⏸ Reader mounted and powered on the rover | 🔧 | M | R4 |
-| 2.6 | ⏸ Firmware RFID module and tag-read frames | 💻 | M | — |
-| 2.7 | ⏸ On-rover read reliability acceptance | 🔧💻 | M | **R2** |
+| **2 — Rock identification** — **method decided 2026-09-14: colour/size CV on a second ESP32-CAM** | | | |
+| 2.0 | ✅ **Identification method decided** — candidate **C2**: colour/size on a dedicated ESP32-CAM board; **D held as a triggered fallback** | 📋 | M | **R2** |
+| 2.1 | ESP32-CAM bring-up on the bench, off the rover | 🔧💻 | M | — |
+| 2.2 | Rock finishing trial — paint the batch, confirm hues separate | 🔧 | M | *(retires R7)* |
+| 2.3 | Colour/size discrimination characterisation — ⚠ **carries the fallback trigger to D** | 🔧💻 | M | **R2** |
+| 2.4 | Detection across range, bearing and lighting extremes | 🔧 | L | **R2** |
+| 2.5 | Camera mounted and powered on the rover | 🔧 | M | R4 |
+| 2.6 | On-board detector and `tag` frames carrying a colour code | 💻 | M | — |
+| 2.7 | On-rover detection reliability acceptance | 🔧💻 | M | **R2** |
 | **3 — Vision & operator console** *(sensing dependencies removed)* | | | |
 | 3.1 | The mast camera streaming to its monitor | 🔧 | M | R3 |
 | 3.2 | Forward-and-down driving view on one camera | 🔧 | M | **R8** |
 | 3.3 | Concurrent load test — video plus driving | 🔧💻 | M | **R1** |
-| 3.4 | Mast pan/tilt under console control | 🔧💻 | M | R8 |
+| 3.4 | Camera pan/tilt under console control — **code landed 2026-09-19 (fw 0.2.0); free-run test pending** | 🔧💻 | M | R8 |
 | 3.5 | Console final layout on the real touchscreen | 💻 | L | — |
 | 3.6 | Blind-driving acceptance run | 🔧 | M | R8 |
 | 3.7 | **Driving-only mission rehearsal (Scenes 1–4)** — the driving finish line | 🔧 | M | R8 |
 | **4 — Full mission integration** ⏸ **blocked on Phase 2** | | | |
 | 4.1a | Arena dressing and base zone — **terrain only, proceeds** | 🔧 | M | — |
-| 4.1b | ⏸ Preparing the rock batch — **held behind 2.0** | 🔧 | M | R7 |
+| 4.1b | Preparing the rock batch — **unblocked by 2.0; now a painting job** | 🔧 | M | — |
 | 4.2 | ⏸ Session log and multi-rock run state | 💻 | M | — |
 | 4.3 | ⏸ Scene-by-scene rehearsal, 1 through 8 | 🔧 | L | — |
 | 4.4 | ⏸ Full repeatable mission run, two or more rocks | 🔧 | M | — |
@@ -1054,7 +1069,7 @@ it rejoins.
 
 ---
 
-### Step 2.0 — Decide the identification method 📋 **GATE**
+### Step 2.0 — Decide the identification method ✅ **GATE — DECIDED 2026-09-14**
 **Goal:** one decision, which unsuspends this phase, 0.1, 0.6, and Phase 4.
 **Owner:** 📋 · **Size:** M · **Depends on:** nothing — **can be taken at any time** · **Risk:** **R2**
 
@@ -1122,9 +1137,343 @@ restarts.** ⛔ Stop for approval.
 
 ---
 
-## The RFID candidate, as worked out under Revision 2 (steps 2.1 – 2.7) ⏸
+## ✅ 2.0 DECIDED, 2026-09-14 — candidate C, on a second ESP32-CAM
 
-*Retained verbatim. These run as written **if and only if** 2.0 picks candidate A.*
+**The method is colour-and-size recognition on a dedicated camera board.** An **ESP32-CAM**, which is already on the desk, mounts at the front where the RFID antenna was going
+to go and looks for finished rocks by hue and apparent size. The mast camera stays. Detection
+runs **on the camera board**; the colour code → element mapping stays **console-side**, in the
+same place [compositions.json](console/data/compositions.json) already lives.
+
+Delegated to Claude by the user on 2026-09-14 after the comparison below. It is recorded at
+length because this gate's whole point is that the reasoning survives, not just the answer.
+
+### The form matters: C2, not C1
+
+The comparison surfaced a split inside candidate C that the original table did not have, and the
+two halves score very differently:
+
+| | What it is | Session power | R8 |
+|---|---|---|---|
+| **C1** | the ESP32-CAM **is** the rover's only camera — driving view, survey and detection | 5.35 W | **worse** — one board is both the eyes and the instrument |
+| **C2** ✅ | a **second** board, forward-facing, dedicated to detection; mast camera unchanged | 7.00 W | **better** — two cameras, different mounts, different jobs |
+
+[power-budget §6](docs/power-budget.md) costed candidate C at **0 mA** on the assumption that CV
+was console-side on the existing mast camera. That assumption does not hold for a second board,
+so §6 is re-costed as part of this decision.
+
+### Against the gate's five criteria
+
+1. **Does it solve the alignment complaint?** Yes, and it is the only candidate that does so
+   without a new trade. C sees across the arena and **gives bearing**, so the console can say
+   *which way* the rock is rather than making the operator infer it from a rising number. A
+   never solved this — and A's real failure in a 1.4 × 3.0 m box is *over*-range, which makes
+   "which rock am I pointing at" meaningless. B is the strictest of the four on alignment, not
+   the loosest.
+2. **What does it do to the proposal?** Revision 3, unavoidably. But C's story is a *better* fit
+   for the audience than D's: **colour as a proxy for mineral composition is what real orbital
+   remote sensing does**, so §9 trades an RF-sensing challenge for a remote-sensing one and
+   loses nothing in credibility. It is also easier to explain to a non-technical sponsor than
+   backscatter RSSI. Critically, **the rocks stay natural-looking objects** — D's markers make
+   it read as though the answer is printed on the rock, which a lay audience sees as cheating in
+   a way a hidden tag never was.
+3. **What does it do to R8?** This is the reason for C2. R8 exists because Revision 2 cut the
+   second camera; C2 puts one back **for free on the power budget** and gives the two cameras
+   independent mounts, supplies and jobs. Either can serve a degraded driving view if the other
+   dies. R8 ends up better than it is today, which no other candidate offers.
+4. **What does it demonstrate?** Computer vision. Defensible on its own merits, and it is the
+   only candidate with **zero procurement**.
+5. **How much of Phase S survives?** All of it, as predicted. The `tag` frame (§4.4) carries a
+   colour code where it carried an EPC; `analysis_panel.gd`'s three-reads-within-1.5 s rule maps
+   onto detection stability unchanged; `compositions.json` re-keys from tag ID to colour code.
+   **No protocol version bump.**
+
+### The two facts that actually decided it
+
+**Procurement, not power.** Phase 0 is unapproved and nothing is bought. A needs a reader, an
+antenna and a tag batch — the longest-lead, highest-cost line in the sensing BOM, and one that
+cannot even be *quoted* until 0.1 and 0.6 run. C needs a board that already exists. That
+collapses the schedule risk of the entire phase, and here it is worth more than any technical
+margin on the table.
+
+**Power is a wash and should not be read as an argument.** Re-running §5 with the sensing
+allowance removed and a second camera added:
+
+| | A — UHF RFID | C2 — chosen |
+|---|---|---|
+| Subtotal | 6.05 W | 5.95 W *(6.43 W with the illuminator at 30% duty)* |
+| After converter losses | 7.12 W | 7.00 W *(7.56 W lit)* |
+| 20-minute session | 2.37 Wh | 2.33 Wh |
+| Minimum pack | 810 mAh | 790 mAh |
+
+**The pack does not change.** §5 recommends 1500–2200 mAh and that figure is set by the **6.2 A
+realistic-worst peak**, not by session energy — so a 25% swing either way buys nothing. What C2
+*does* improve is the **5 V rail peak**: A's 800 mA transmit burst disappears, which eases the
+bulk capacitance in §4.3. Meanwhile **the steering motor is still 20% of session energy at 10%
+duty (F6)** and remains the only place where power is worth attacking.
+
+### What C costs, recorded honestly
+
+- **Lighting becomes the new R2.** Auto white balance and auto exposure must be *locked*, and
+  the arena needs stable illumination. This is a real dependency and the likeliest way C fails.
+  It is mitigated, not eliminated, by a calibration step and the board's own illuminator.
+- **Discrimination is bounded.** Hue alone gives perhaps 5–8 reliable classes; combining hue
+  with an apparent-size band widens that. Two rocks of the same colour are the same rock, where
+  A had unlimited unique IDs. Acceptable at the storyboard's five-rock session, and **it is now
+  the binding constraint on how many rocks a session may contain**.
+- **Airtime.** A second Wi-Fi station on 2.4 GHz threatens R1, and step 1.2's p95 of 19.8 ms was
+  measured with *no* camera streaming at all. This is why detection runs **on-board** and the
+  board sends a compact detection frame — the video stream exists for the operator's view, not
+  for the detector. 3.3 must re-measure with both cameras live.
+- **The board is awkward.** No USB — flashing needs an FTDI adapter and GPIO0 pulled low — and
+  it browns out readily on a soft 5 V rail. §4.3's bulk capacitance applies to it specifically.
+
+### The fallback, with a trigger rather than a feeling
+
+**If new step 2.3 cannot reach ≥ 95% correct class over 100 detections spanning the arena's
+lighting extremes, switch to candidate D** (ArUco/AprilTag fiducials). D reuses the same board,
+the same mount, the same power line, the same firmware structure and the same replacement steps
+below — **only the detector changes** — so the switch costs the 2.3 measurement and nothing
+else. It buys unique IDs, distance and immunity to lighting, at the cost of the natural-rock
+appearance that argued for C in criterion 2. Recording the trigger now is what stops it becoming
+a judgement call made later under schedule pressure.
+
+### Which of 2.1–2.7 are replaced, and what replaces them
+
+**All seven.** The RFID sequence below is retained as history, not deleted, and is now
+superseded rather than merely suspended. The replacement keeps the original ordering principle
+exactly — *characterise the sensor on a bench before putting it on something that moves* — and
+maps one-for-one, which is itself a sign the phase shape was right:
+
+| Was | Becomes |
+|---|---|
+| 2.1 Reader bring-up on the bench | **2.1 ESP32-CAM bring-up on the bench** — flash over FTDI, stream, prove the board and the OV2640 alive off the rover |
+| 2.2 Tag embedding trial and survivability | **2.2 Rock finishing trial** — paint the batch, confirm the finishes are separable in hue under arena light. Retires R7 |
+| 2.3 Read-range characterisation | **2.3 Colour/size discrimination characterisation** ⚠️ **carries the fallback trigger above** — locked AWB/exposure, calibration card, ≥ 95% over 100 detections |
+| 2.4 Read through rock, sand, orientation | **2.4 Detection across range, bearing and lighting extremes** — the new R2 test: distance limits, the ± angle the lens actually covers, and the arena's worst and best light |
+| 2.5 Reader mounted and powered on the rover | **2.5 Camera mounted and powered on the rover** — front mount, its own 5 V feed and bulk cap, brownout proving |
+| 2.6 Firmware RFID module and tag-read frames | **2.6 On-board detector and `tag` frames** — blob detection on the camera board, emitting a colour code into the existing §4.4 frame; thresholds settable at runtime, so re-dressing the arena needs no reflash |
+| 2.7 On-rover read reliability acceptance | **2.7 On-rover detection reliability acceptance** — unchanged in intent |
+
+### What this unblocks, and what it now owes
+
+- **Unblocked:** 0.1 (sensing spec, now a vision spec), 0.6 (sensing BOM, which is close to
+  empty), 4.1b (rock batch, now a painting job), and Phase 4.
+- **Owed before Phase 2 restarts:** ⛔ **Revision 3 of
+  [plan/storyboard-rev2.md](plan/storyboard-rev2.md)**, per this gate's own terms. §3, §4.3,
+  §5.2, §5.4, R2 and R7 all state UHF RFID as decided design. R7 is retired; R2 is rewritten
+  from tag orientation to lighting stability; R8 improves and should say so.
+- **Owed to [docs/power-budget.md](docs/power-budget.md):** §6 re-costed (done with this
+  decision) and §5's average restated at 5.95 W.
+- **Not owed:** any protocol change. v2 carries this unmodified.
+
+---
+
+### Step 2.0b — Camera board bring-up and host detector, before the rover ⏳
+**Goal:** prove the imaging hardware and work out the detector on a bench, with nothing
+mounted on anything that moves.
+**Owner:** 🔧💻 · **Size:** L · **Depends on:** 2.0 · **Risk:** **R2 (lighting)**
+
+2.0b inherits the ordering principle the RFID sequence established — *characterise the
+sensor on a bench before putting it on something that moves*. It was referenced by
+`platformio.ini` and `src/cam_check.cpp` from 2026-09-14 but never written down here; this
+block is that omission corrected, not new scope.
+
+| | What | State |
+|---|---|---|
+| **2.0b.1** | ESP32-CAM bring-up — identity, PSRAM, sensor PID, a frame down the serial line | ✅ sketch built 2026-09-14 (`-e camcheck`), **never run — that board is not the one in use** |
+| **2.0b.1x** | **XIAO ESP32S3 Sense bring-up** — the same proof on the board actually bought | ✅ **PASSED 2026-09-18** (`-e xiaocam`) — see below |
+| **2.0b.2** | Streaming and bulk capture over Wi-Fi, with AWB/AEC **locked** against a reference card | ✅ **built and proven 2026-09-18** (`-e xiaostream`) |
+| **2.0b.3** | The detector itself, worked out on the host against a corpus, where iterating is free | ✅ **done 2026-09-26** as 2.0c–2.0e — and "on the host" turned out to be where it stays |
+
+**The board changed, and the decision record has not caught up.** Step 2.0 chose candidate
+C on the strength of an **ESP32-CAM "already on the desk" — zero procurement**. A **XIAO
+ESP32S3 Sense was ordered 2026-09-16 and received 2026-09-18**, so that fact is no longer
+true as written: there *was* procurement, and the board is a different one. The choice
+still stands and is on better footing — 8 MB OPI PSRAM, native USB, vector instructions,
+and none of the FTDI-and-GPIO0 handling that `[env:camcheck]`'s header warns about — but
+**2.0's decision block says ESP32-CAM in four places and needs amending**, alongside the
+CNN question raised at 2.0c. Both amendments belong to the same review, so they are held
+together rather than applied piecemeal.
+
+`[env:camcheck]` is **kept, not replaced**. The ESP32-CAM remains a usable second camera
+and a fallback if the XIAO is damaged, and the two sketches are deliberately separate
+files: different pin maps, different silicon, and no `#ifdef` between them that could put
+the wrong map one preprocessor mistake away from compiling.
+
+**2.0b.1x result, 2026-09-18 — PASSED.** Flashed over COM8 with no FTDI adapter and no
+GPIO0 strap. `ESP32-S3 rev 0, 2 cores`, 8 MB flash, **PSRAM 8159 KB of 8189 KB free**,
+MAC `AC:27:6E:A5:7A:90`. A burst of ten returned 320×240 JPEGs of 3938–3974 bytes —
+*varying*, which is the evidence that matters — and one frame decoded through
+[tools/cam_grab.py](tools/cam_grab.py) into a real photograph, in focus and correctly
+oriented. The only fault visible was a blown highlight around a ceiling lamp, which is
+auto-exposure doing its job and is what 2.0b.2 exists to take away.
+
+**2.0b.2 result, 2026-09-18 — built and proven.** Joined `Dean_WiFi` at **192.168.1.39**,
+RSSI −55 dBm. Serves **VGA 640×480 at ~26 fps** over MJPEG, `/snap` in 46 ms, and `/lock`
+freezes AGC/AEC/AWB with the board's own `/status` read-back confirming all three at 0.
+
+One design fault was found by measurement and fixed rather than papered over: the first
+version served everything from a single `WebServer`, and because an MJPEG handler never
+returns, **an open stream starved every control endpoint** — `/lock` simply timed out. The
+rewrite runs two `esp_http_server` instances in their own FreeRTOS tasks, control on **:80**
+and stream on **:81**. Locking while streaming now answers in 167 ms. The lesson generalises
+to anything else that grows a long-lived handler on this board.
+
+**Review gate for 2.0b (both):** met as recorded above. ⛔ Stop for approval.
+
+---
+
+### Step 2.0c — Recognition POC ✅ **DONE 2026-09-26** ⚠ **AMENDS 2.0**
+**Goal:** prove the whole identify loop — show a rock, get an element — on the PC, with no
+camera board in existence.
+**Owner:** 💻 · **Size:** M · **Depends on:** 2.0 · **Risk:** **R2 (lighting)**
+
+A **XIAO ESP32S3 Sense** was ordered on 2026-09-16 and is in shipping. This step is what runs
+while it ships. It is a dry run of 2.2, 2.3 and 2.6 on a laptop webcam: capture rocks, label
+each as an element, train a classifier, and put the name on screen when the rock is shown.
+
+**It does not close any of those three steps.** All three have to be re-run on the real board,
+under real arena light, against the real finished rocks. What 2.0c buys is that they start from
+a pipeline known to work end to end and a dataset that already exists, rather than from nothing
+on the afternoon the board lands.
+
+**Two deviations from 2.0's decision block, both taken knowingly** (the reasoning is in
+[vision/README.md](vision/README.md), and the gate below is where they get resolved):
+
+1. **A trained CNN, not colour-and-size thresholds.** Directed by the user on 2026-09-16. It
+   reads shape and texture, which hue thresholds cannot — "the green *sharp* rock" is half a
+   shape claim. The cost is 50–200 images per class instead of five, and **2.6's promise that
+   detector thresholds are settable at runtime does not survive**: a model is a flash, not a
+   setting.
+2. **A XIAO ESP32S3 Sense, not an ESP32-CAM.** Not a deviation by choice — it is the board that
+   was bought. It is the better board for (1): 8 MB PSRAM and vector instructions make TFLite
+   Micro comfortable where a plain ESP32-CAM is marginal, and it has USB-C, so the FTDI-and-
+   GPIO0 ritual that `[env:camcheck]` is built around disappears.
+
+**Do:**
+- `vision/capture.py` — label rocks and build the dataset. Locks camera exposure and white
+  balance where the driver allows and records what it actually got, because 2.0 named lighting
+  as the replacement for R2. ✅ built 2026-09-16
+- `vision/train.py` — train a small classifier over that dataset, hold out a test split, and
+  print a **confusion matrix**, not just an accuracy number. ⏳
+- `vision/detect.py` — live webcam inference with the element name on screen. ⏳
+- Capture across at least two lighting conditions, and include a `background` class, so the
+  detector can say "no rock" rather than naming one in every frame.
+- **Capture through the OV2640, not the laptop webcam, once 2.0b.1x passes.** The board
+  arrived 2026-09-18, which changes the order of this step: a model trained on webcam
+  frames and deployed to the OV2640 faces a **domain gap** — different sensor, lens, colour
+  response, field of view and resolution — and that gap shows up as accuracy lost for no
+  visible reason. Webcam capture stays useful for shaking the pipeline out; it should not
+  be what the shipped model is trained on. `capture.py` therefore needs a board-frame
+  source (2.0b.2's stream) before the real corpus is shot.
+
+**Review gate:** the loop demonstrated end to end, an honest accuracy figure against a held-out
+set captured under *different* light from the training set, and a decision on the two
+deviations above — **if the POC holds up, step 2.0's decision block is amended** so that
+"colour-and-size recognition on an ESP32-CAM" stops being the recorded design while the built
+thing is something else. 2.0's fallback trigger is unchanged: below **95% correct class over
+100 detections** across the lighting extremes, switch to ArUco fiducials. ⛔ Stop for approval.
+
+**2.0c result, 2026-09-26 — the loop runs end to end.** The corpus was shot through the board
+on the real floor with the sensor locked (2 rocks x 100 frames, 100 of empty floor, plus a
+held-out round under changed light), auto-labelled at [2.0d](#), trained as FOMO 160x160 in
+Edge Impulse, and run live at [2.0e](#). Both deviations above are therefore live, and a third
+and fourth arrived at 2.0e. `train.py` and `detect.py` were never written: Edge Impulse
+replaced the first and [vision/detect_stream.py](vision/detect_stream.py) the second.
+
+---
+
+### Step 2.0d — Auto-labelling, so nobody draws boxes ✅ **DONE 2026-09-26**
+**Goal:** turn raw sessions into a labelled detection dataset without hand annotation.
+**Owner:** 💻 · **Size:** S · **Depends on:** 2.0c · **Risk:** R2 (lighting)
+
+Hand-annotating 300 frames is the step that stalls a vision POC, and the user's judgement on
+2026-09-26 — *"the annotation process is too complex"* — was the trigger. It is avoidable
+because of how the corpus is shot, not because of any cleverness in the labeller: **one rock
+per session, on the arena floor, plus one session of the *empty* floor under the same sensor
+lock.** Two facts fall out of that. The session already says which rock is in every frame, so
+the class needs no clicking. And the floor's colours are known, so the rock can be found by
+contrast rather than by a threshold somebody tunes.
+
+[vision/autolabel.py](vision/autolabel.py) builds a 2-D histogram of Lab chroma over a rock's
+session and another over the background session, and back-projects the log-ratio: per colour,
+how much more common it is when the rock is in shot than when it is not. The rock lights up,
+the floor goes dark, the largest blob on the floor becomes the box. Nothing is tuned per rock
+and the board's colour cast cancels, because both histograms carry it.
+
+**Result.** 238 boxes over two rocks plus 100 empty-floor frames, and 40 boxes plus 20 empty
+in a held-out split. Six flagged for review; all six were correct on inspection. Blobs in the
+top 30% of frame are discarded rather than flagged — that band is the room behind the arena,
+and a box on a yellow waste bin teaches worse than a dropped frame does.
+
+**What it does not do:** rocks that are not separable from the floor by colour. That is a real
+limit and the fallback is unchanged — ArUco.
+
+**Review gate:** met. Procedure in [vision/TRAINING.md](vision/TRAINING.md) §3.
+
+---
+
+### Step 2.0e — Live inference, on the host ✅ **DONE 2026-09-26** ⚠ **AMENDS 2.0**
+**Goal:** show a rock, get an element, live, from the board's own camera.
+**Owner:** 💻 · **Size:** M · **Depends on:** 2.0d · **Risk:** **R1 (link), R2 (lighting)**
+
+**The decision: inference runs on the operator PC, not on the detection board.**
+
+Both were built. The on-board route — `[env:xiaodetect]`,
+[firmware/src/xiao_detect.cpp](firmware/src/xiao_detect.cpp) — compiles, links the Edge
+Impulse export with the ESP32-S3 vector kernels, and reaches inference. It is **parked, not
+abandoned**; its heap fix has never been flashed and verified.
+
+What decided it, measured rather than argued:
+
+| | XIAO ESP32-S3 | host (i7) |
+|---|---|---|
+| Per frame | 2713 ms (Studio estimate, made without ESP-NN) | **~1 ms measured** |
+| Practical rate | under 1 fps | limited by the camera, not the CPU |
+| Model choice | FOMO MobileNet 0.35, and little else fits | anything — real boxes, higher input, more classes |
+| Changing the model | rebuild and reflash | drop in a file, rerun |
+
+[vision/detect_stream.py](vision/detect_stream.py) pulls the MJPEG stream `xiaostream`
+already serves, runs the model through `ai-edge-litert`, joins FOMO's grid cells into one
+centroid per rock, undoes the training-time centre crop, and draws the **element** name — from
+`manifest.json`, never from the model, so re-dressing the arena retrains nothing.
+
+**Result against the held-out set** (different session, visibly different light): 20/20
+green-sharp, 20/20 red-round, 0 false alarms on 20 empty-floor frames, ~1 ms per frame. That
+measurement asks *"is the right rock detected somewhere in the frame"*. Edge Impulse's
+localisation-aware F1 on the same frames is **0.80**, because it also requires the centroid to
+land on the rock; the gap is a scale mismatch between the training and test sessions, diagnosed
+in [vision/TRAINING.md](vision/TRAINING.md) §5.2 and **accepted rather than fixed** — the two
+objects are stand-ins and the floor is not the glass arena.
+
+⚠ **This is the fourth and largest drift from 2.0's decision block**, and it is architectural
+rather than cosmetic. 2.0 says detection runs **on the detection board**, which reports a
+colour code to the control ESP32, which relays it to the console in a `tag` frame. With
+host-side inference **the rover reports nothing** and the `tag` path is unused. Held with the
+other three for one review:
+
+1. "ESP32-CAM" in four places — the board is a XIAO ESP32S3 Sense.
+2. "Zero procurement" cited as a deciding fact — a board was bought.
+3. A trained CNN instead of colour-and-size thresholds, so **2.6's runtime-settable detector
+   thresholds cannot survive** — a model is a flash, not a setting.
+4. **Detection host-side, so no `tag` frame from the rover.**
+
+**Note what is *not* consumed:** 2.0's fallback trigger — below 95% correct class over 100
+detections across the lighting extremes, switch to ArUco — is a measurement against the **real
+rocks in the real arena**, and this was neither. It stands untouched.
+
+**Review gate:** the loop is demonstrated end to end and the numbers above are honest, but the
+four amendments are unapplied by design. ⛔ Stop for approval on the amendments, and on whether
+the console absorbs the detector (TRAINING.md §6.6) or it stays a separate window.
+
+---
+
+## The RFID candidate, as worked out under Revision 2 (steps 2.1 – 2.7) ❌ **SUPERSEDED**
+
+*Retained verbatim as history. **2.0 did not pick candidate A**, so none of these run — all
+seven are replaced by the mapping in 2.0's decision block above. Kept because the ordering
+principle in the next paragraph is what the replacements inherit, and because a reversal to A
+would want them back intact.*
 
 The ordering below is deliberate: **prove the tag survives embedding, and prove the read works
 on a bench, before either is attached to a rover.** Debugging a marginal read on a moving
@@ -1326,6 +1675,41 @@ proceed.** ⛔ Stop for approval. **Keep the CSV — Phase 2 re-runs this compar
 ---
 
 ### Step 3.4 — Mast pan/tilt under console control
+
+> 🔄 **Changed and started 2026-09-19.** **The mast no longer moves**: its pan/tilt pair is
+> gone and the head is the **camera's own pan/tilt, on two JX PDI-D56MG servos** (3.7–5.5 V,
+> so a regulated 5.0 V rail). Wiring: [docs/servo-wiring.md](docs/servo-wiring.md) — GPIO18/19,
+> LEDC 2–3. Wired by you the same day, which is why this step ran ahead of 3.2 on your
+> go-ahead.
+>
+> **Landed, firmware 0.2.0:** `lib/Aim` (limits, direction, angle → pulse; host-tested in
+> `test/test_aim`) and `lib/PanTilt` (LEDC) instead of the `lib/Mast` named below; `main.cpp`
+> actuates `mast` while armed, advertises `mast` in `caps` and reports `pan`/`tilt` in
+> telemetry; the console's reserved pad is live as hold-to-move plus W/A/S/D and C to centre;
+> the simulator clamps to the same limits. **No protocol version bump** — the verb keeps its
+> name and the telemetry fields were already reserved (protocol §3.4, §4.2). Flashed to the
+> rover and confirmed over Wi-Fi: `fw 0.2.0`, `caps [drive, steer3, mast]`, head at 0/0.
+>
+> **Free-run test, 2026-09-20 — in progress.** Pan direction correct; **tilt was reversed**
+> (TILT UP pointed down), fixed in firmware 0.2.1 by negating `CAM_TILT_US_PER_DEG`. The
+> console and protocol were left alone on purpose: they speak "positive = up", and the
+> firmware is what knows how the servo is mounted.
+>
+> **Servos re-positioned, both axes reversed (fw 0.2.3, 2026-09-20).** Pan went to −10 µs/°
+> and tilt back to +10. A re-mount flips the sign and nothing else: limits, console and wire
+> stay in protocol terms. A host test now pins which way each axis faces.
+>
+> **Tilt down opened to −60° (fw 0.2.2, 2026-09-20)**, from −30°, on your call that the
+> driving view needed to look further down; the pulse range went to 920–2120 µs to reach it,
+> which is the D56MG's full 120°. Tilt therefore has **no travel left in reserve** — pan
+> still has some.
+>
+> **Still owed by this step:** the rest of the free-run test in servo-wiring.md §6, which is
+> also where the direction of each axis gets confirmed and the **travel limits get measured** — pan
+> −45…45 and tilt −30…45 are deliberately narrow guesses until then. The oscillation check
+> below now applies to the camera head rather than a pole. The **return-to-driving-position**
+> control is CENTRE (0/0) for now; whether the driving position should be tilted down is a
+> call for the test.
 **Owner:** 🔧💻 · **Size:** M · **Depends on:** 3.2 · **Risk:** R8
 
 **Do:** `firmware/lib/Mast/` on the same self-contained pattern as `Drive`; two servos on

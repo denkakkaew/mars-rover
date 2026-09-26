@@ -39,6 +39,23 @@ The three headline results all reverse:
 The session average moves less than any of this suggests — from 6.0 W to **7.1 W** — because
 every added load is duty-limited. The *peaks* are what moved.
 
+### 0.1 Amended 2026-09-14 — the sensing allowance became a part
+
+**Step 2.0 decided the identification method**: colour-and-size recognition on a second
+ESP32-CAM, not UHF RFID. That turns §6's allowance into a line item and is handled in **§6.1**
+and **§6.2** rather than by rewriting the tables above — deliberately, so the estimate the
+decision was taken against stays legible.
+
+The short version: **average power is a wash** (7.12 W → 7.00 W), **the pack recommendation does
+not move**, and the one genuine gain is on the **5 V peak**, which drops from 1430 mA to 980 mA
+because A's 800 mA transmit burst no longer exists. Nothing in §3, §4 or §7 changes.
+
+⚠ **Two things in this document are now stale for a different reason** — the 2026-08-30 wiring
+rework, not 2.0. §1 still shows both drive motors on DRV8833 bridge A and the steering on bridge
+B, but the drive pair has since moved to an **L293D** with the steering alone on the DRV8833,
+which is what actually answered **F8**. **F8 and F9 both want restating against the two-chip
+wiring**, and that is a re-estimate of its own, not part of 2.0.
+
 ---
 
 ## 1. What is fitted, and when
@@ -53,7 +70,7 @@ The budget has to cover the finished rover, not today's. Phase 1 draws a fractio
 | Mast pan/tilt servos | 2 | SG90 | 3 | servo |
 | Camera pan/tilt servos | **2** | SG90 | 3 | servo |
 | Mast IP camera | 1 | not chosen until 0.4 | 3 | 5 V |
-| Sensing payload | 1 | not chosen until 2.0 | 2 | 5 V — **allowance only, see §6** |
+| **Detection camera** | 1 | **ESP32-CAM** — chosen at 2.0, already owned | 2 | 5 V — **a real part now, see §6.1** |
 
 **Three motors and four servos.** The motor count is what forces F8; the servo count roughly
 doubles the servo rail, which §4.1 already gave its own regulator for reasons that now apply
@@ -327,7 +344,7 @@ margin. If a session is meaningfully longer than that, this is the number to tel
 | Drive motors ×2 | 3.00 W | 40% | 1.20 W |
 | **Steering motor** | **12.00 W** | 10% | **1.20 W** |
 | SG90 servos ×4 | 3.00 W | 10% | 0.30 W |
-| Sensing (candidate A) | 1.50 W | 100% | 1.50 W |
+| Sensing (candidate A) — **superseded by §6.2** | 1.50 W | 100% | 1.50 W |
 | | | **subtotal** | **6.05 W** |
 | Converter losses (÷ 0.85) | | | **≈ 7.1 W** |
 
@@ -355,9 +372,14 @@ that reduces the hold current pays twice.
 
 ---
 
-## 6. The sensing allowance — carried, not costed
+## 6. The sensing load — decided 2026-09-14
 
-Step 2.0 has not run, so there is no sensing part to budget. The allowance is sized against the
+> ✅ **Step 2.0 has run.** It chose **candidate C2**: colour-and-size recognition on a **second
+> ESP32-CAM** at the front mounting point, mast camera unchanged. The allowance in
+> this section is superseded by a real line item — §6.1. What follows is kept because it is the
+> estimate the decision was taken against, and because §5 is still computed on it.
+
+Before 2.0 ran there was no sensing part to budget. The allowance was sized against the
 hungriest candidate, and **which candidate is hungriest depends on which question you ask**:
 
 | Candidate | Average | Peak | Rail |
@@ -382,6 +404,67 @@ free**:
 
 So 2.0 changes a BOM line, the §5 average, and — if it picks B — one converter rating. It does
 not reopen this step.
+
+### 6.1 What C2 actually costs — the correction to the row above
+
+**The 0 mA against C/D is wrong for the form of C that was chosen**, and the error is worth
+naming rather than quietly fixing: it assumed the CV ran console-side on the *existing* mast
+camera. 2.0 chose a **second board carried on the rover**, so the honest figure is another
+camera row, not zero.
+
+| Line | Idle | Working | Worst case | Rail |
+|---|---|---|---|---|
+| Detection camera — ESP32-CAM | 40 mA | **280 mA** | 350 mA | 5 V |
+| — its illuminator LED, *if* the arena needs one | 0 | 320 mA | **320 mA** | 5 V |
+| ~~Sensing allowance (candidate A)~~ | — | ~~300 mA~~ | ~~800 mA~~ | — |
+
+The 280 mA is the mast-camera row plus roughly 30 mA, because this board runs its CPU flat out
+doing blob detection where the mast camera only streams. **Detection runs on-board deliberately**
+— a second MJPEG stream would double the 2.4 GHz airtime, and step 1.2 measured its 19.8 ms p95
+with *no* camera streaming at all. That makes on-board detection an R1 defence at least as much
+as a power one, and it is the thing step 3.3 must now re-measure with both cameras live.
+
+Net against candidate A, on the 5 V rail:
+
+| | A — UHF RFID | **C2 — chosen** |
+|---|---|---|
+| 5 V working | 670 mA | **620 mA** *(940 mA lit)* |
+| 5 V worst case | **1430 mA** | **980 mA** *(1300 mA lit)* |
+
+**The peak is the real gain, and it is the only one.** A's 800 mA transmit burst is gone, and
+with it the hardest transient §4.3's bulk capacitance had to absorb. Average power is a wash —
+§6.2 does that arithmetic — and **should not be quoted as a reason 2.0 went this way.**
+Procurement was the reason; see the decision block at step 2.0 in
+[IMPLEMENTATION_PLAN.md](../IMPLEMENTATION_PLAN.md).
+
+Two consequences that are not about current:
+
+- **The ESP32-CAM browns out readily.** It is the part on this rover most sensitive to a soft
+  5 V rail, so §4.3's bulk capacitance applies to it *locally* — at the board, not only at the
+  converter. Step 2.5 proves this before the board is trusted on a moving chassis.
+- **B's 6 A servo-rail resizing is retired.** It existed only as a contingency against candidate
+  B, which was not chosen. The servo rail stays sized for four servos.
+
+### 6.2 What it does to §5
+
+Swap the sensing row for the detection-camera row and re-run the session table:
+
+| | A — UHF RFID | **C2 — chosen** | C2, illuminator at 30% duty |
+|---|---|---|---|
+| Sensing / detection line | 1.50 W @ 100% | **1.40 W @ 100%** | 1.40 W + 0.48 W |
+| Subtotal | 6.05 W | **5.95 W** | 6.43 W |
+| After converter losses (÷ 0.85) | 7.12 W | **7.00 W** | 7.56 W |
+| 20-minute session | 2.37 Wh | **2.33 Wh** | 2.52 Wh |
+| Minimum rated capacity at 7.4 V | 810 mAh | **790 mAh** | 850 mAh |
+
+**The pack recommendation does not move.** §5 asks for 2S 1500–2200 mAh and that figure is set
+by the **6.2 A realistic-worst peak** and by not running the cell flat, not by session energy —
+so a 20 mAh difference changes nothing. Even the illuminated case is inside it.
+
+**And §5.1 still stands unchanged: the steering motor is 20% of session energy at 10% duty.**
+It remains the only place on this rover where attacking power is worth the effort. Choosing a
+sensing method was never going to be that place, which is why power was not allowed to decide
+it.
 
 ---
 

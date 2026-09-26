@@ -406,6 +406,29 @@ void test_telemetry_is_tagged(void) {
   TEST_ASSERT_NOT_NULL(strstr(out, "\"rfid\":\"ready\""));
 }
 
+void test_telemetry_omits_head_when_not_fitted(void) {
+  // A build without the head must not report 0/0 — that would read as "centred" rather
+  // than "no head" (protocol.md 4.2).
+  protocol::Telemetry telemetry;
+  char out[protocol::kMaxFrameBytes];
+  TEST_ASSERT_GREATER_THAN_UINT32(0, protocol::serializeTelemetry(telemetry, out, sizeof(out)));
+  TEST_ASSERT_NULL(strstr(out, "\"pan\""));
+  TEST_ASSERT_NULL(strstr(out, "\"tilt\""));
+}
+
+void test_telemetry_reports_head_rounded(void) {
+  protocol::Telemetry telemetry;
+  telemetry.has_head = true;
+  telemetry.pan_deg = -12.34f;
+  telemetry.tilt_deg = 30.0f;
+
+  char out[protocol::kMaxFrameBytes];
+  TEST_ASSERT_GREATER_THAN_UINT32(0, protocol::serializeTelemetry(telemetry, out, sizeof(out)));
+  TEST_ASSERT_NOT_NULL(strstr(out, "\"pan\":-12.3"));
+  TEST_ASSERT_NULL(strstr(out, "\"pan\":-12.34"));
+  TEST_ASSERT_NOT_NULL(strstr(out, "\"tilt\":30"));
+}
+
 void test_reader_state_names(void) {
   // Scene 1 gates the mission on the reader reporting green, so "not fitted" and
   // "fitted but broken" must never collapse into one value.
@@ -569,6 +592,8 @@ int main(int, char **) {
   RUN_TEST(test_refreshes_failsafe_membership);
 
   RUN_TEST(test_telemetry_is_tagged);
+  RUN_TEST(test_telemetry_omits_head_when_not_fitted);
+  RUN_TEST(test_telemetry_reports_head_rounded);
   RUN_TEST(test_telemetry_mode_names);
   RUN_TEST(test_reader_state_names);
   RUN_TEST(test_tag_read_frame);

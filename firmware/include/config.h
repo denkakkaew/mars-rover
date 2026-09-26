@@ -58,9 +58,83 @@ constexpr uint8_t PIN_STEER_IN2 = 33;  // -> DRV8833 AIN2
 // The steering claims no LEDC channel at all: it is three-position, so there is no speed
 // to modulate (step 1.3).
 //
-// So channels 2 upward are free for the Phase 3 servos, which need four.
+// So channels 2 upward are free for the Phase 3 servos, which take 2 and 3 (below).
 constexpr uint8_t LEDC_CHANNEL_DRIVE_IN1 = 0;
 constexpr uint8_t LEDC_CHANNEL_DRIVE_IN2 = 1;
+
+// ---- Servos: two JX PDI-D56MG, camera pan and tilt (Phase 3) ----
+// Revised 2026-09-19: the mast no longer moves, so its pan/tilt pair is gone and only the
+// camera's pan/tilt remains. Wiring in docs/servo-wiring.md. **Wired and actuated
+// 2026-09-19** (firmware 0.2.0): main.cpp drives them through lib/PanTilt from `mast`
+// commands. Free-run testing since 2026-09-20 — 0.2.1 reversed tilt, 0.2.2 opened it
+// downward, 0.2.3 reversed both axes after the servos were re-positioned; step 3.4 still
+// owes measured limits.
+//
+// **The D56MG is a 3.7-5.5 V part.** Its rail must be a regulated 5.0 V — never the 6 V
+// motor rail, never the pack, and not a fresh 4xAA pack either (5.6 V NiMH, 6.4 V
+// alkaline).
+//
+// Why these GPIOs: neither is a strapping pin and neither emits anything during boot, so
+// a reset cannot twitch the camera head into its own cable (the same test GPIO32 passed
+// for the drive). GPIO16/17 are left for UART2 to the detection board and GPIO21/22 for
+// I2C, so neither future link has to evict a servo.
+constexpr uint8_t PIN_SERVO_CAM_PAN = 18;
+constexpr uint8_t PIN_SERVO_CAM_TILT = 19;
+
+// LEDC channels share a timer in pairs on arduino-esp32 2.x (0+1, 2+3, ...), and a timer
+// has one frequency. The drive's pair holds timer 0 at 1.5 kHz, so the servos take 2+3 —
+// timer 1 at 50 Hz — and never touch the drive's timer.
+constexpr uint8_t LEDC_CHANNEL_SERVO_CAM_PAN = 2;
+constexpr uint8_t LEDC_CHANNEL_SERVO_CAM_TILT = 3;
+
+// D56MG timing. It is a digital servo and accepts up to 333 Hz; 50 Hz is the rate every
+// servo accepts, so start there and raise it only if step 3.4 wants faster settling.
+// 16-bit resolution at 50 Hz is 0.31 us per count. Centre is the vendor's 1520 us.
+//
+// **Widened 920-2120 us on 2026-09-20**, from the conservative 1000-2000 it first ran. The
+// D56MG's 120 degrees is 1520 +/- 600 us at 10 us/deg, so this is the part's whole travel
+// and not a guess past it — 2000 us stopped tilt at -48 deg, short of the downward view
+// asked for. What each axis may actually use is the *angle* limits below, which is where a
+// head that would wrap its own camera cable gets stopped.
+constexpr uint32_t SERVO_PWM_FREQUENCY_HZ = 50;
+constexpr uint8_t SERVO_PWM_RESOLUTION_BITS = 16;
+constexpr uint16_t SERVO_PULSE_MIN_US = 920;
+constexpr uint16_t SERVO_PULSE_CENTRE_US = 1520;
+constexpr uint16_t SERVO_PULSE_MAX_US = 2120;
+
+// Travel limits, degrees, in protocol terms: pan positive = right, tilt positive = up,
+// 0/0 = straight ahead at the horizon (docs/protocol.md 3.4). **First-free-run values,
+// set narrow on purpose** — the real mechanical limits are measured at step 3.4 and
+// replace these. The rover clamps to them and so does the console, which mirrors them as
+// HEAD_PAN_LIMITS / HEAD_TILT_LIMITS in console/scripts/console.gd: change one, change
+// both.
+constexpr float CAM_PAN_MIN_DEG = -45.0f;  // still has reserve; tilt does not
+constexpr float CAM_PAN_MAX_DEG = 45.0f;
+// Tilt down opened from -30 to -60 on 2026-09-20 at your request: -30 did not look far
+// enough down for driving. -60 is the servo's mechanical end, so this axis now has nothing
+// left in reserve — if the bracket fouls or the servo strains before it gets there, pull
+// this back rather than widening the pulse limits again. **These angles survived the
+// re-positioning unchanged**: they are stated in protocol terms (down is down), and which
+// way the servo turns to get there is the scale's sign below.
+constexpr float CAM_TILT_MIN_DEG = -60.0f;
+constexpr float CAM_TILT_MAX_DEG = 45.0f;
+
+// Pulse per degree. An **estimate**: the D56MG's 120 degrees of travel is taken to span
+// about 1200 us. At 10 us/deg the limits above land at 1970..1070 us (pan -45..+45, which
+// runs backwards on this mounting) and 920..1970 us (tilt -60..+45) — so tilt reaches the
+// end of the 920..2120 us range at full down, while pan keeps margin at both ends.
+//
+// **The sign is the direction.** If PAN R turns the camera left, or TILT UP points it
+// down, the servo is mounted the other way round: negate that axis's constant. Nothing
+// else changes — the limits, the console and the wire all stay in protocol terms.
+//
+// History, because these have moved twice and the reason is mechanical, not a bug:
+//   0.2.1 (2026-09-20) tilt reversed to -10: TILT UP pointed the camera down.
+//   0.2.3 (2026-09-20) **both** reversed after you re-positioned the servos — pan to -10
+//         and tilt back to +10. Re-mounting a servo is exactly what flips these, so expect
+//         to revisit them after any bracket change.
+constexpr float CAM_PAN_US_PER_DEG = -10.0f;
+constexpr float CAM_TILT_US_PER_DEG = 10.0f;
 
 // ---- Power monitoring ----
 // LiPo pack through a resistor divider into an ADC pin.
@@ -113,7 +187,9 @@ constexpr char ROVER_SUBNET_MASK[] = "255.255.255.0";
 
 // Reported to the console in the `hello` reply, so a mission log can record which
 // build produced a run (docs/protocol.md 4.1).
-constexpr char FIRMWARE_VERSION[] = "0.1.0";
+// 0.2.0: camera pan/tilt head actuated. 0.2.1: tilt direction reversed. 0.2.2: tilt down
+// to -60 deg. 0.2.3: both axes reversed after the servos were re-positioned.
+constexpr char FIRMWARE_VERSION[] = "0.2.3";
 
 // Failsafe: if no drive command arrives within this window, the motors are cut.
 // A dropped Wi-Fi link must never leave the rover driving into the glass wall (risk R1).

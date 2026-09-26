@@ -1,6 +1,7 @@
 #include "Protocol.h"
 
 #include <ArduinoJson.h>
+#include <math.h>
 #include <string.h>
 
 namespace protocol {
@@ -203,6 +204,12 @@ size_t serializeTelemetry(const Telemetry &telemetry, char *out, size_t capacity
   doc["mode"] = modeName(telemetry.mode);
   doc["rssi"] = telemetry.rssi;
   doc["rfid"] = readerStateName(telemetry.reader);
+  if (telemetry.has_head) {
+    // Reserved names (protocol.md 4.2), additive. Rounded to 0.1 degree and sent as a
+    // double so the wire carries "12.3" rather than a float's "12.30000019".
+    doc["pan"] = round(static_cast<double>(telemetry.pan_deg) * 10.0) / 10.0;
+    doc["tilt"] = round(static_cast<double>(telemetry.tilt_deg) * 10.0) / 10.0;
+  }
   return emit(doc, out, capacity);
 }
 

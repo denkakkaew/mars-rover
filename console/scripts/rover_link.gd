@@ -370,9 +370,11 @@ func _cancel_nudge() -> void:
 	nudge_state_changed.emit(false)
 
 
-## Mast camera pan/tilt head, in degrees. Absolute angles, not increments.
+## Camera pan/tilt head, in degrees. Absolute angles, not increments. The verb is still
+## `mast` on the wire although the mast itself no longer moves (docs/protocol.md 3.4).
+## Rounded to 0.1 degree, as the rover reports it.
 func send_mast(pan_deg: float, tilt_deg: float) -> void:
-	_send({"cmd": "mast", "pan": pan_deg, "tilt": tilt_deg})
+	_send({"cmd": "mast", "pan": snappedf(pan_deg, 0.1), "tilt": snappedf(tilt_deg, 0.1)})
 
 
 func _send_drive() -> void:

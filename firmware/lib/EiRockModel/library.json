@@ -1,0 +1,32 @@
+{
+  "name": "EiRockModel",
+  "version": "0.7.0",
+  "description": "Edge Impulse FOMO rock detector, exported from studio project 1121527 as a C++ MCU library. 160x160 RGB in, class + centroid out. Everything except this file is generated -- do not hand-edit it; re-export and replace the folder.",
+  "license": "BSD-3-Clause-Clear",
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "build": {
+    "flags": [
+      "-DEI_PORTING_ESPRESSIF=1",
+      "-DEI_CLASSIFIER_TFLITE_ENABLE_ESP_NN=1",
+      "-DEI_CLASSIFIER_TFLITE_ENABLE_ESP_NN_S3=1",
+      "-DESP_NN=1",
+      "-DEIDSP_QUANTIZE_FILTERBANK=0",
+      "-DTF_LITE_DISABLE_X86_NEON=1",
+      "-DTF_LITE_STATIC_MEMORY=1",
+      "-Wno-unused-parameter",
+      "-Wno-missing-field-initializers",
+      "-Wno-sign-compare",
+      "-Wno-type-limits",
+      "-O3"
+    ],
+    "srcFilter": [
+      "+<*>",
+      "-<edge-impulse-sdk/CMSIS>",
+      "-<edge-impulse-sdk/porting>",
+      "+<edge-impulse-sdk/porting/espressif>",
+      "-<edge-impulse-sdk/porting/espressif/esp-dsp>"
+    ],
+    "libArchive": false
+  }
+}

@@ -7,6 +7,8 @@
 //   lib/Protocol — JSON frame <-> typed Command, and telemetry serialisation
 //   lib/Safety   — the failsafe state machine
 //   lib/Drive    — H-bridge throttle and steering
+//   lib/Aim      — camera pan/tilt travel limits and angle -> pulse
+//   lib/PanTilt  — the two head servos on LEDC
 //
 // What is left here is the part that genuinely needs the board: Wi-Fi, the WebSocket
 // server, the battery ADC, and the wiring between those three. Camera video is
@@ -19,6 +21,7 @@
 #include <WiFi.h>
 
 #include "Drive.h"
+#include "PanTilt.h"
 #include "Protocol.h"
 #include "Safety.h"
 #include "config.h"
@@ -28,6 +31,17 @@ namespace {
 
 Drive g_drive({PIN_DRIVE_IN1, PIN_DRIVE_IN2, LEDC_CHANNEL_DRIVE_IN1, LEDC_CHANNEL_DRIVE_IN2},
               {PIN_STEER_IN1, PIN_STEER_IN2});
+
+// The camera pan/tilt head: two D56MGs (docs/servo-wiring.md). Limits and direction are
+// config.h's; the mapping is lib/Aim's and is host-tested.
+PanTilt g_head(
+    {PIN_SERVO_CAM_PAN, LEDC_CHANNEL_SERVO_CAM_PAN,
+     {CAM_PAN_MIN_DEG, CAM_PAN_MAX_DEG, SERVO_PULSE_CENTRE_US, CAM_PAN_US_PER_DEG,
+      SERVO_PULSE_MIN_US, SERVO_PULSE_MAX_US}},
+    {PIN_SERVO_CAM_TILT, LEDC_CHANNEL_SERVO_CAM_TILT,
+     {CAM_TILT_MIN_DEG, CAM_TILT_MAX_DEG, SERVO_PULSE_CENTRE_US, CAM_TILT_US_PER_DEG,
+      SERVO_PULSE_MIN_US, SERVO_PULSE_MAX_US}},
+    SERVO_PWM_FREQUENCY_HZ, SERVO_PWM_RESOLUTION_BITS);
 
 WebSocketsServer g_server(CONTROL_WS_PORT);
 safety::Failsafe g_failsafe(COMMAND_TIMEOUT_MS);
@@ -40,14 +54,18 @@ bool g_hello_received = false;
 bool g_handshake_expired = false;
 
 // Subsystems this build actually has (docs/protocol.md 4.1). "rfid" joins the list when
-// Phase 2 fits the reader and "mast" when Phase 3 fits the servos; until then the console
-// greys those out rather than sending commands into a void.
+// Phase 2 fits the reader; until then the console greys it out rather than sending
+// commands into a void.
+//
+// "mast" is the camera pan/tilt head, fitted 2026-09-19. The rover no longer has a moving
+// mast, but the token keeps its wire name: renaming it would break every console for the
+// sake of a word (docs/protocol.md 3.4).
 //
 // "steer3" declares three-position steering, so the console knows a `steer` of 0.3 will be
 // rounded away rather than honoured. Exactly one steering token must accompany "drive" —
 // a later proportional-steering build swaps it for "steerprop" and needs no version bump,
 // which is the whole reason `steer` stayed a float on the wire (docs/protocol.md 3.2.1).
-const char *const kCapabilities[] = {"drive", "steer3"};
+const char *const kCapabilities[] = {"drive", "steer3", "mast"};
 
 // One shared outbound buffer. Every frame is built and sent within a single call, and
 // the WebSocket library copies before returning, so there is nothing to overlap.
@@ -148,8 +166,13 @@ void handleCommand(uint8_t client, const protocol::Command &cmd, uint32_t now) {
       break;
 
     case protocol::CommandType::Mast:
-      // Accepted shape, not yet actuated — the pan/tilt servos land in Phase 3.
-      log_w("%s command accepted but not actuated yet", protocol::name(cmd.type));
+      // Same gate as drive: servo commands are ignored in safe mode, and the head holds
+      // where it is rather than being moved by the failsafe (docs/protocol.md 6.1). A
+      // `mast` frame is itself a fresh command, so after the handshake the first one
+      // arms the rover and is then acted on — panning needs no drive press first.
+      if (g_state == safety::State::Armed) {
+        g_head.point(cmd.has_pan, cmd.pan_deg, cmd.has_tilt, cmd.tilt_deg);
+      }
       break;
 
     default:
@@ -197,6 +220,13 @@ void publishTelemetry() {
   // answer and keeps the two distinguishable once one is fitted at step 2.5; the real
   // state comes from lib/Rfid at step 2.6.
   telemetry.reader = protocol::ReaderState::Absent;
+
+  // The commanded pose after clamping. Hobby servos report nothing back, so this is
+  // where the head was told to be — a stalled or unpowered servo still reads as obeying.
+  const aim::Pose head = g_head.pose();
+  telemetry.has_head = true;
+  telemetry.pan_deg = head.pan_deg;
+  telemetry.tilt_deg = head.tilt_deg;
 
   const size_t length = protocol::serializeTelemetry(telemetry, g_out, sizeof(g_out));
   if (length == 0) {
@@ -335,6 +365,10 @@ void setup() {
   // outside this firmware's control on every reset; this is the earliest point at which
   // it can be pulled down and the motors made safe.
   g_drive.begin();
+
+  // The head centres here, on every reset: its signal lines have sat low on their
+  // pull-downs until now, so the servos had no pulses and were limp (docs/servo-wiring.md).
+  g_head.begin();
 
   pinMode(PIN_STATUS_LED, OUTPUT);
   digitalWrite(PIN_STATUS_LED, LOW);

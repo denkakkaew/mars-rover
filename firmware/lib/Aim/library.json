@@ -1,0 +1,7 @@
+{
+  "name": "Aim",
+  "version": "1.0.0",
+  "description": "Camera pan/tilt angle -> servo pulse mapping and travel limits. Host-compilable: no Arduino headers. See docs/servo-wiring.md.",
+  "frameworks": "*",
+  "platforms": "*"
+}

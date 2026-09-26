@@ -1,0 +1,14 @@
+# Captured frames are gitignored BY DEFAULT — see vision/README.md "Is the dataset in
+# git?". Delete these two lines if you decide the dataset should be versioned; the
+# manifest below is tracked either way, so the label→element mapping is never lost.
+dataset/**/*.jpg
+dataset/**/*.png
+
+# Trained artifacts — reproducible from the dataset, so not sources. model/ holds the
+# Edge Impulse export .zip; keep a copy off the repo, because the Studio project is
+# not backed up here either.
+models/
+model/
+
+# Frames saved with 's' from detect_stream.py.
+detections/

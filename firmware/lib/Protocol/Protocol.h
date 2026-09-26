@@ -109,6 +109,13 @@ struct Telemetry {
   Mode mode = Mode::Safe;
   int rssi = 0;  ///< Wi-Fi link strength, dBm. Not the RFID RSSI.
   ReaderState reader = ReaderState::Absent;
+
+  /// Camera pan/tilt head, degrees (protocol.md 4.2). Sent only when `has_head`: a build
+  /// without the head omits the fields rather than reporting zeros it cannot vouch for.
+  /// Reports the *commanded* pose after clamping — hobby servos have no position feedback.
+  bool has_head = false;
+  float pan_deg = 0.0f;
+  float tilt_deg = 0.0f;
 };
 
 /// One RFID tag read (protocol.md 4.4).
