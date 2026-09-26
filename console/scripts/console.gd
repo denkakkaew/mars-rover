@@ -207,6 +207,10 @@ var _has_armed := false
 
 const RttLog := preload("res://scripts/rtt_log.gd")
 var _rtt_log := RttLog.new()
+
+## The host-side detector reports rocks here rather than over the rover link (step 2.0e).
+const DetectionApi := preload("res://scripts/detection_api.gd")
+var _detection_api := DetectionApi.new()
 var _last_telemetry: Dictionary = {}
 
 ## Held rather than written straight to the label: the handshake lands before the first
@@ -224,6 +228,8 @@ func _ready() -> void:
 	_link.tag_read.connect(_on_tag_read)
 	_rtt_log.open()
 	print("Analysis: %s" % _analysis_panel.table_summary())
+	_detection_api.handler = _on_detection
+	add_child(_detection_api)
 	_schedule_touch_audit()
 
 	# Debug affordance, like ROVER_URL and RTT_LOG: CONSOLE_SHOT=<path> captures the
@@ -527,6 +533,10 @@ func _on_rtt_updated(rtt: int, p95: int) -> void:
 
 func _on_tag_read(tag_id: String, rssi: int, rover_ts_ms: int) -> void:
 	_analysis_panel.on_tag_read(tag_id, rssi, rover_ts_ms)
+
+
+func _on_detection(element: String, _label: String, confidence: float) -> bool:
+	return _analysis_panel.on_detection(element, confidence)
 
 
 func _exit_tree() -> void:

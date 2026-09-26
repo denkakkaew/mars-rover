@@ -230,6 +230,33 @@ func _log(tag_id: String, name: String, rssi: int, now: float) -> void:
 	_render_log()
 
 
+## Called for each element the host-side detector reports (detection_api.gd). Unlike a
+## tag, which is counted on every re-read, a detection is inserted once: the detector
+## reports the same rock on frame after frame, so a name already on the list is dropped
+## rather than updated. Returns true when the entry was new.
+func on_detection(element: String, confidence: float) -> bool:
+	if _has_name(element):
+		return false
+	_session["detect:" + element.to_lower()] = {
+		"name": element,
+		"count": 1,
+		"best_rssi": 0,
+		"at": Time.get_time_string_from_system(),
+		"seq": _session.size() + 1,
+	}
+	_render_log()
+	print("Analysis: detected %s at %.0f%%" % [element, confidence * 100.0])
+	return true
+
+
+func _has_name(name: String) -> bool:
+	var wanted := name.strip_edges().to_lower()
+	for record in _session.values():
+		if str((record as Dictionary)["name"]).strip_edges().to_lower() == wanted:
+			return true
+	return false
+
+
 func _render_log() -> void:
 	for child in _log_list.get_children():
 		child.queue_free()
