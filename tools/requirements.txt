@@ -3,3 +3,11 @@
 # firmware/platformio.ini.
 
 websockets>=14.0    # fake_rover.py uses the asyncio server API added in 14
+pyserial>=3.5       # cam_grab.py talks to the camera bring-up sketch over USB CDC
+
+# vision/: capture, auto-labelling and host-side inference.
+opencv-python>=4.8  # capture.py, autolabel.py, detect_stream.py
+numpy>=1.24
+requests>=2.31      # detect_stream.py pulls the board's MJPEG stream
+ai-edge-litert>=1.0 # the TFLite interpreter, standalone -- no TensorFlow needed, and it
+                    # works alongside numpy 2.x where the full tensorflow wheel does not

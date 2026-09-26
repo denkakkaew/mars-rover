@@ -61,6 +61,12 @@ TELEMETRY_INTERVAL_S = 0.500
 # (protocol.md 5). Mirrors HANDSHAKE_DEADLINE_MS in firmware/include/config.h.
 HANDSHAKE_DEADLINE_S = 2.0
 
+# Camera pan/tilt travel, degrees (protocol.md 3.4). Mirrors CAM_PAN_*/CAM_TILT_* in
+# firmware/include/config.h — the rover clamps a `mast` angle to these, so the simulator
+# must too, or telemetry here would report angles the real head can never reach.
+HEAD_PAN_LIMITS = (-45.0, 45.0)
+HEAD_TILT_LIMITS = (-60.0, 45.0)
+
 # Commands that count as proof of a live console (protocol.md 6.2). Note the absentees:
 # ping and hello do not keep the motors alive. `arm` was retired with the manipulator in
 # proposal Revision 2 and is now simply an unknown verb.
@@ -919,9 +925,9 @@ class Simulator:
         elif cmd.kind == "mast":
             if self.state == "drive":
                 if cmd.pan is not None:
-                    self.rover.pan = cmd.pan
+                    self.rover.pan = min(max(cmd.pan, HEAD_PAN_LIMITS[0]), HEAD_PAN_LIMITS[1])
                 if cmd.tilt is not None:
-                    self.rover.tilt = cmd.tilt
+                    self.rover.tilt = min(max(cmd.tilt, HEAD_TILT_LIMITS[0]), HEAD_TILT_LIMITS[1])
 
     async def _expire_handshake(self, ws) -> None:
         """A console that never says hello is treated as an unknown version."""

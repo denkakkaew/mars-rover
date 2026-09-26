@@ -24,3 +24,4 @@ $RECYCLE.BIN/
 __pycache__/
 *.py[cod]
 plan/*
+vision/dataset/*

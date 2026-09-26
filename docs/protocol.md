@@ -8,6 +8,11 @@ the ESP32 rover firmware. Companion to [plan/storyboard-rev2.md](../plan/storybo
 that identifies rocks in place. The `arm` command was retired at step S.9 and the `tag` frame
 (§4.4) added, with no version bump.
 
+**`mast` actuated on 2026-09-19** (firmware 0.2.0) — as the **camera pan/tilt head**, since
+the mast itself no longer moves. Additive, **no version bump**: the verb, its fields and the
+`caps` token keep their names (§3.4), and the telemetry `pan`/`tilt` fields it added were
+already reserved (§4.2).
+
 **Bumped to v2 at step S.14** (2026-08-13), because step 0.2 chose a chassis this protocol did
 not describe: **one throttle and one steering angle**, not two independently driven sides. (The
 rear axle turns out to carry *two* motors rather than one, but they are driven together off a
@@ -217,9 +222,14 @@ strictly stronger than it was when this section was written at S.14.*
 Neither is a substitute for the failsafe. §5 stops the rover when the console says *nothing at
 all*, which is the case a `stop` frame cannot cover.
 
-### 3.4 `mast` — pan/tilt head
+### 3.4 `mast` — camera pan/tilt head
 
-Absolute angles for the mast camera head. Not incremental.
+Absolute angles for the camera pan/tilt head. Not incremental.
+
+**The name is historical.** Since 2026-09-19 the mast does not move; the only pan/tilt left
+is the camera's own, on two D56MG servos ([servo-wiring.md](servo-wiring.md)). The verb, its
+fields and the `caps` token stay `mast` anyway: renaming them would be a breaking change
+(§5) bought for a word, and every implementation already agrees on this one.
 
 ```json
 {"cmd":"mast","pan":0,"tilt":15}
@@ -232,9 +242,14 @@ Absolute angles for the mast camera head. Not incremental.
 | `tilt` | number | degrees | −30 … 60 | hold current | Down/up; **0 = horizon**, positive = up |
 
 - **Absolute, not relative.** Sending the same frame twice is idempotent.
-- **Ranges above are placeholders** pending the mechanical travel limits measured in step 2.2.
-  Those measured limits become the authority; the firmware clamps to them and a commanded
-  angle can never drive a joint into its own mechanical stop.
+- **The ranges above are the wire's, not the head's.** The rover clamps each axis to its own
+  travel, set in `config.h` as `CAM_PAN_*`/`CAM_TILT_*` — currently **pan −45 … 45, tilt
+  −60 … 45** (tilt opened downward on 2026-09-20 for the driving view; −60 is the servo's
+  mechanical end), and replaced by measured limits at step 3.4. A commanded angle can never drive the head into its own mechanical stop. The
+  console clamps to the same figures, for the same reason as throttle (§3.2): without it, a
+  held PAN R would wind the console's angle on past a head that has stopped.
+- **The telemetry `pan`/`tilt` (§4.2) report the clamped angle**, so a console can always
+  see what the head was actually told.
 - **A missing field holds that axis** at its current angle, so pan and tilt can be commanded
   independently.
 - Ignored while in safe mode (§5).
@@ -284,12 +299,11 @@ Sent once, in response to the console's `hello`.
 | `drive` | The rover has a drivetrain and will act on `fwd` |
 | `steer3` | **Three-position steering**: `steer` is thresholded to left / centre / right (§3.2.1) |
 | `steerprop` | **Proportional steering**: `steer` is honoured continuously |
-| `mast` | Pan/tilt head fitted and actuated (step 3.4) |
+| `mast` | Camera pan/tilt head fitted and actuated (§3.4). Advertised since firmware 0.2.0 |
 | `rfid` | RFID reader fitted and polled (step 2.6) |
 
-`caps` is how the console knows what is real on this build. During Phases S–1 it is
-`["drive","steer3"]`; `rfid` appears when Phase 2 fits the reader and `mast` when Phase 3 fits
-the servos. The console **must** disable controls for absent capabilities rather than sending
+`caps` is how the console knows what is real on this build. Since firmware 0.2.0 it is
+`["drive","steer3","mast"]`; `rfid` appears when Phase 2 fits the reader. The console **must** disable controls for absent capabilities rather than sending
 commands into a void — this is what makes the Scene 1 readiness row (step S.6) honest instead
 of decorative.
 
@@ -316,6 +330,8 @@ the rover will not move, so it must never be gated on the rover being ready to m
 | `mode` | string | — | see below | yes | Rover state |
 | `rssi` | integer | dBm | −100 … 0 | yes | Rover's own view of the **Wi-Fi** link. Not to be confused with the RFID `rssi` in §4.4 — different radio, different question. The number risk R6 is judged on (step 1.2). |
 | `rfid` | string | — | see below | yes | RFID reader state |
+| `pan` | number | degrees | head's travel | **iff `caps` has `mast`** | Camera head pan, as commanded **after clamping**, 0.1° resolution. Hobby servos report nothing back, so this is where the head was *told* to be — a stalled or unpowered servo still reads as obeying |
+| `tilt` | number | degrees | head's travel | **iff `caps` has `mast`** | Camera head tilt, likewise |
 
 `mode` values, and no others:
 
@@ -336,7 +352,8 @@ may start, so "no reader fitted" and "reader fitted but broken" must be distingu
 | `"fault"` | Reader fitted but not responding, or reporting an error |
 
 **Reserved field names**, so later additions cannot collide with something else: `mast`,
-`pan`, `tilt`, `uptime_ms`, `errors`, `run`, `session`. Adding any of these is additive and
+`uptime_ms`, `errors`, `run`, `session`. (`pan` and `tilt` were reserved here until firmware
+0.2.0 put them to use, above.) Adding any of these is additive and
 needs no version bump (§2.3).
 
 ### 4.3 `pong` — latency probe reply
@@ -695,7 +712,8 @@ what writing it three times is for.
 | `caps` steering token (§4.1) | ✅ reports `steer3` | ✅ refuses to arm without exactly one | ✅ advertises, and can be told to omit it | Drop it with `--caps drive` to check the console still refuses |
 | Steering ⇒ no pivot (§3.2) | n/a — `Drive` just actuates | ✅ pad says so when steering with no throttle | ✅ bicycle model; `w ∝ v`, so a stationary rover cannot turn | The behaviour S.15 exists to make true everywhere |
 | `stop` | ✅ | ✅ | ✅ | F2 closed in S.6 — `send_stop()`, wired to the STOP button. Unchanged by S.14 |
-| `mast` | ⚠️ accepted, ignored | ✅ sender exists | ⚠️ accepted, ignored | Actuated in step 3.4 |
+| `mast` (camera pan/tilt) | ✅ **actuated**, 0.2.0 — `lib/Aim` + `lib/PanTilt`, clamped, armed-only | ✅ hold-to-move pad + W/A/S/D, clamped | ✅ actuated, clamped | 2026-09-19. Gated on `Armed` like `drive`; a `mast` frame is itself a fresh command, so it arms the rover after the handshake |
+| Telemetry `pan`/`tilt` (§4.2) | ✅ 0.2.0 | ✅ adopted while idle | ✅ | Only sent when `caps` has `mast` |
 | ~~`arm`~~ | **removed** | **removed** | **removed** | Retired in S.9 with the manipulator. No version bump needed — see §5. |
 | `hello` | ✅ | ✅ | ✅ | Console sends it on connect and retries every 1 s until answered; rover replies with `caps` and refuses to arm on a mismatch |
 | Handshake gate (§5) | ✅ **armed** | ✅ | ✅ | Rover will not arm without a matching `hello` on the current connection; the 2000 ms deadline then flips telemetry to `incompatible`. Closed in S.6. |
@@ -747,7 +765,7 @@ Deliberately unresolved, each with the step that closes it.
 
 | # | Item | Closed by |
 |---|---|---|
-| 1 | `mast` pan/tilt ranges are placeholders | Step 3.4 — measured mechanical limits |
+| 1 | Camera head travel limits (pan −45…45, tilt −60…45) and the 10 µs/° scale are **guesses trimmed by eye**, not measurements — tilt's downward end is now the servo's own limit, so only pan has reserve | Step 3.4 — measured mechanical limits |
 | ~~2~~ | ~~Arm joint count and per-joint ranges~~ — **moot; the arm was removed in Revision 2** | Closed |
 | ~~3~~ | ~~Round-trip latency target~~ — **agreed at S.7: p95 ≤ 100 ms, ceiling 250 ms (§4.5)** | Closed |
 | ~~8~~ | ~~**The steering hold duty.**~~ — **resolved at 1.3, in the opposite direction to the one this row assumed.** `Drive` held the steering at a reduced duty (`kSteerHoldDuty = 0.7`) to keep a continuous stall inside the L293D's 600 mA channel. On the bench that duty could not shift the axle against its return spring at all, so **the steering bridge is now switched flat on with no PWM and no duty parameter**. The stall is therefore at *full* rail voltage, which makes it larger, not smaller — see **F6** in [power-budget.md](power-budget.md) | Closed at 1.3; the current it draws is measured at **1.4** |

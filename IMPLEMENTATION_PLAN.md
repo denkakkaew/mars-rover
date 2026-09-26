@@ -167,7 +167,7 @@ Consequences that shape the work below:
 | 3.1 | The mast camera streaming to its monitor | 🔧 | M | R3 |
 | 3.2 | Forward-and-down driving view on one camera | 🔧 | M | **R8** |
 | 3.3 | Concurrent load test — video plus driving | 🔧💻 | M | **R1** |
-| 3.4 | Mast pan/tilt under console control | 🔧💻 | M | R8 |
+| 3.4 | Camera pan/tilt under console control — **code landed 2026-09-19 (fw 0.2.0); free-run test pending** | 🔧💻 | M | R8 |
 | 3.5 | Console final layout on the real touchscreen | 💻 | L | — |
 | 3.6 | Blind-driving acceptance run | 🔧 | M | R8 |
 | 3.7 | **Driving-only mission rehearsal (Scenes 1–4)** — the driving finish line | 🔧 | M | R8 |
@@ -1268,6 +1268,206 @@ maps one-for-one, which is itself a sign the phase shape was right:
 
 ---
 
+### Step 2.0b — Camera board bring-up and host detector, before the rover ⏳
+**Goal:** prove the imaging hardware and work out the detector on a bench, with nothing
+mounted on anything that moves.
+**Owner:** 🔧💻 · **Size:** L · **Depends on:** 2.0 · **Risk:** **R2 (lighting)**
+
+2.0b inherits the ordering principle the RFID sequence established — *characterise the
+sensor on a bench before putting it on something that moves*. It was referenced by
+`platformio.ini` and `src/cam_check.cpp` from 2026-09-14 but never written down here; this
+block is that omission corrected, not new scope.
+
+| | What | State |
+|---|---|---|
+| **2.0b.1** | ESP32-CAM bring-up — identity, PSRAM, sensor PID, a frame down the serial line | ✅ sketch built 2026-09-14 (`-e camcheck`), **never run — that board is not the one in use** |
+| **2.0b.1x** | **XIAO ESP32S3 Sense bring-up** — the same proof on the board actually bought | ✅ **PASSED 2026-09-18** (`-e xiaocam`) — see below |
+| **2.0b.2** | Streaming and bulk capture over Wi-Fi, with AWB/AEC **locked** against a reference card | ✅ **built and proven 2026-09-18** (`-e xiaostream`) |
+| **2.0b.3** | The detector itself, worked out on the host against a corpus, where iterating is free | ✅ **done 2026-09-26** as 2.0c–2.0e — and "on the host" turned out to be where it stays |
+
+**The board changed, and the decision record has not caught up.** Step 2.0 chose candidate
+C on the strength of an **ESP32-CAM "already on the desk" — zero procurement**. A **XIAO
+ESP32S3 Sense was ordered 2026-09-16 and received 2026-09-18**, so that fact is no longer
+true as written: there *was* procurement, and the board is a different one. The choice
+still stands and is on better footing — 8 MB OPI PSRAM, native USB, vector instructions,
+and none of the FTDI-and-GPIO0 handling that `[env:camcheck]`'s header warns about — but
+**2.0's decision block says ESP32-CAM in four places and needs amending**, alongside the
+CNN question raised at 2.0c. Both amendments belong to the same review, so they are held
+together rather than applied piecemeal.
+
+`[env:camcheck]` is **kept, not replaced**. The ESP32-CAM remains a usable second camera
+and a fallback if the XIAO is damaged, and the two sketches are deliberately separate
+files: different pin maps, different silicon, and no `#ifdef` between them that could put
+the wrong map one preprocessor mistake away from compiling.
+
+**2.0b.1x result, 2026-09-18 — PASSED.** Flashed over COM8 with no FTDI adapter and no
+GPIO0 strap. `ESP32-S3 rev 0, 2 cores`, 8 MB flash, **PSRAM 8159 KB of 8189 KB free**,
+MAC `AC:27:6E:A5:7A:90`. A burst of ten returned 320×240 JPEGs of 3938–3974 bytes —
+*varying*, which is the evidence that matters — and one frame decoded through
+[tools/cam_grab.py](tools/cam_grab.py) into a real photograph, in focus and correctly
+oriented. The only fault visible was a blown highlight around a ceiling lamp, which is
+auto-exposure doing its job and is what 2.0b.2 exists to take away.
+
+**2.0b.2 result, 2026-09-18 — built and proven.** Joined `Dean_WiFi` at **192.168.1.39**,
+RSSI −55 dBm. Serves **VGA 640×480 at ~26 fps** over MJPEG, `/snap` in 46 ms, and `/lock`
+freezes AGC/AEC/AWB with the board's own `/status` read-back confirming all three at 0.
+
+One design fault was found by measurement and fixed rather than papered over: the first
+version served everything from a single `WebServer`, and because an MJPEG handler never
+returns, **an open stream starved every control endpoint** — `/lock` simply timed out. The
+rewrite runs two `esp_http_server` instances in their own FreeRTOS tasks, control on **:80**
+and stream on **:81**. Locking while streaming now answers in 167 ms. The lesson generalises
+to anything else that grows a long-lived handler on this board.
+
+**Review gate for 2.0b (both):** met as recorded above. ⛔ Stop for approval.
+
+---
+
+### Step 2.0c — Recognition POC ✅ **DONE 2026-09-26** ⚠ **AMENDS 2.0**
+**Goal:** prove the whole identify loop — show a rock, get an element — on the PC, with no
+camera board in existence.
+**Owner:** 💻 · **Size:** M · **Depends on:** 2.0 · **Risk:** **R2 (lighting)**
+
+A **XIAO ESP32S3 Sense** was ordered on 2026-09-16 and is in shipping. This step is what runs
+while it ships. It is a dry run of 2.2, 2.3 and 2.6 on a laptop webcam: capture rocks, label
+each as an element, train a classifier, and put the name on screen when the rock is shown.
+
+**It does not close any of those three steps.** All three have to be re-run on the real board,
+under real arena light, against the real finished rocks. What 2.0c buys is that they start from
+a pipeline known to work end to end and a dataset that already exists, rather than from nothing
+on the afternoon the board lands.
+
+**Two deviations from 2.0's decision block, both taken knowingly** (the reasoning is in
+[vision/README.md](vision/README.md), and the gate below is where they get resolved):
+
+1. **A trained CNN, not colour-and-size thresholds.** Directed by the user on 2026-09-16. It
+   reads shape and texture, which hue thresholds cannot — "the green *sharp* rock" is half a
+   shape claim. The cost is 50–200 images per class instead of five, and **2.6's promise that
+   detector thresholds are settable at runtime does not survive**: a model is a flash, not a
+   setting.
+2. **A XIAO ESP32S3 Sense, not an ESP32-CAM.** Not a deviation by choice — it is the board that
+   was bought. It is the better board for (1): 8 MB PSRAM and vector instructions make TFLite
+   Micro comfortable where a plain ESP32-CAM is marginal, and it has USB-C, so the FTDI-and-
+   GPIO0 ritual that `[env:camcheck]` is built around disappears.
+
+**Do:**
+- `vision/capture.py` — label rocks and build the dataset. Locks camera exposure and white
+  balance where the driver allows and records what it actually got, because 2.0 named lighting
+  as the replacement for R2. ✅ built 2026-09-16
+- `vision/train.py` — train a small classifier over that dataset, hold out a test split, and
+  print a **confusion matrix**, not just an accuracy number. ⏳
+- `vision/detect.py` — live webcam inference with the element name on screen. ⏳
+- Capture across at least two lighting conditions, and include a `background` class, so the
+  detector can say "no rock" rather than naming one in every frame.
+- **Capture through the OV2640, not the laptop webcam, once 2.0b.1x passes.** The board
+  arrived 2026-09-18, which changes the order of this step: a model trained on webcam
+  frames and deployed to the OV2640 faces a **domain gap** — different sensor, lens, colour
+  response, field of view and resolution — and that gap shows up as accuracy lost for no
+  visible reason. Webcam capture stays useful for shaking the pipeline out; it should not
+  be what the shipped model is trained on. `capture.py` therefore needs a board-frame
+  source (2.0b.2's stream) before the real corpus is shot.
+
+**Review gate:** the loop demonstrated end to end, an honest accuracy figure against a held-out
+set captured under *different* light from the training set, and a decision on the two
+deviations above — **if the POC holds up, step 2.0's decision block is amended** so that
+"colour-and-size recognition on an ESP32-CAM" stops being the recorded design while the built
+thing is something else. 2.0's fallback trigger is unchanged: below **95% correct class over
+100 detections** across the lighting extremes, switch to ArUco fiducials. ⛔ Stop for approval.
+
+**2.0c result, 2026-09-26 — the loop runs end to end.** The corpus was shot through the board
+on the real floor with the sensor locked (2 rocks x 100 frames, 100 of empty floor, plus a
+held-out round under changed light), auto-labelled at [2.0d](#), trained as FOMO 160x160 in
+Edge Impulse, and run live at [2.0e](#). Both deviations above are therefore live, and a third
+and fourth arrived at 2.0e. `train.py` and `detect.py` were never written: Edge Impulse
+replaced the first and [vision/detect_stream.py](vision/detect_stream.py) the second.
+
+---
+
+### Step 2.0d — Auto-labelling, so nobody draws boxes ✅ **DONE 2026-09-26**
+**Goal:** turn raw sessions into a labelled detection dataset without hand annotation.
+**Owner:** 💻 · **Size:** S · **Depends on:** 2.0c · **Risk:** R2 (lighting)
+
+Hand-annotating 300 frames is the step that stalls a vision POC, and the user's judgement on
+2026-09-26 — *"the annotation process is too complex"* — was the trigger. It is avoidable
+because of how the corpus is shot, not because of any cleverness in the labeller: **one rock
+per session, on the arena floor, plus one session of the *empty* floor under the same sensor
+lock.** Two facts fall out of that. The session already says which rock is in every frame, so
+the class needs no clicking. And the floor's colours are known, so the rock can be found by
+contrast rather than by a threshold somebody tunes.
+
+[vision/autolabel.py](vision/autolabel.py) builds a 2-D histogram of Lab chroma over a rock's
+session and another over the background session, and back-projects the log-ratio: per colour,
+how much more common it is when the rock is in shot than when it is not. The rock lights up,
+the floor goes dark, the largest blob on the floor becomes the box. Nothing is tuned per rock
+and the board's colour cast cancels, because both histograms carry it.
+
+**Result.** 238 boxes over two rocks plus 100 empty-floor frames, and 40 boxes plus 20 empty
+in a held-out split. Six flagged for review; all six were correct on inspection. Blobs in the
+top 30% of frame are discarded rather than flagged — that band is the room behind the arena,
+and a box on a yellow waste bin teaches worse than a dropped frame does.
+
+**What it does not do:** rocks that are not separable from the floor by colour. That is a real
+limit and the fallback is unchanged — ArUco.
+
+**Review gate:** met. Procedure in [vision/TRAINING.md](vision/TRAINING.md) §3.
+
+---
+
+### Step 2.0e — Live inference, on the host ✅ **DONE 2026-09-26** ⚠ **AMENDS 2.0**
+**Goal:** show a rock, get an element, live, from the board's own camera.
+**Owner:** 💻 · **Size:** M · **Depends on:** 2.0d · **Risk:** **R1 (link), R2 (lighting)**
+
+**The decision: inference runs on the operator PC, not on the detection board.**
+
+Both were built. The on-board route — `[env:xiaodetect]`,
+[firmware/src/xiao_detect.cpp](firmware/src/xiao_detect.cpp) — compiles, links the Edge
+Impulse export with the ESP32-S3 vector kernels, and reaches inference. It is **parked, not
+abandoned**; its heap fix has never been flashed and verified.
+
+What decided it, measured rather than argued:
+
+| | XIAO ESP32-S3 | host (i7) |
+|---|---|---|
+| Per frame | 2713 ms (Studio estimate, made without ESP-NN) | **~1 ms measured** |
+| Practical rate | under 1 fps | limited by the camera, not the CPU |
+| Model choice | FOMO MobileNet 0.35, and little else fits | anything — real boxes, higher input, more classes |
+| Changing the model | rebuild and reflash | drop in a file, rerun |
+
+[vision/detect_stream.py](vision/detect_stream.py) pulls the MJPEG stream `xiaostream`
+already serves, runs the model through `ai-edge-litert`, joins FOMO's grid cells into one
+centroid per rock, undoes the training-time centre crop, and draws the **element** name — from
+`manifest.json`, never from the model, so re-dressing the arena retrains nothing.
+
+**Result against the held-out set** (different session, visibly different light): 20/20
+green-sharp, 20/20 red-round, 0 false alarms on 20 empty-floor frames, ~1 ms per frame. That
+measurement asks *"is the right rock detected somewhere in the frame"*. Edge Impulse's
+localisation-aware F1 on the same frames is **0.80**, because it also requires the centroid to
+land on the rock; the gap is a scale mismatch between the training and test sessions, diagnosed
+in [vision/TRAINING.md](vision/TRAINING.md) §5.2 and **accepted rather than fixed** — the two
+objects are stand-ins and the floor is not the glass arena.
+
+⚠ **This is the fourth and largest drift from 2.0's decision block**, and it is architectural
+rather than cosmetic. 2.0 says detection runs **on the detection board**, which reports a
+colour code to the control ESP32, which relays it to the console in a `tag` frame. With
+host-side inference **the rover reports nothing** and the `tag` path is unused. Held with the
+other three for one review:
+
+1. "ESP32-CAM" in four places — the board is a XIAO ESP32S3 Sense.
+2. "Zero procurement" cited as a deciding fact — a board was bought.
+3. A trained CNN instead of colour-and-size thresholds, so **2.6's runtime-settable detector
+   thresholds cannot survive** — a model is a flash, not a setting.
+4. **Detection host-side, so no `tag` frame from the rover.**
+
+**Note what is *not* consumed:** 2.0's fallback trigger — below 95% correct class over 100
+detections across the lighting extremes, switch to ArUco — is a measurement against the **real
+rocks in the real arena**, and this was neither. It stands untouched.
+
+**Review gate:** the loop is demonstrated end to end and the numbers above are honest, but the
+four amendments are unapplied by design. ⛔ Stop for approval on the amendments, and on whether
+the console absorbs the detector (TRAINING.md §6.6) or it stays a separate window.
+
+---
+
 ## The RFID candidate, as worked out under Revision 2 (steps 2.1 – 2.7) ❌ **SUPERSEDED**
 
 *Retained verbatim as history. **2.0 did not pick candidate A**, so none of these run — all
@@ -1475,6 +1675,41 @@ proceed.** ⛔ Stop for approval. **Keep the CSV — Phase 2 re-runs this compar
 ---
 
 ### Step 3.4 — Mast pan/tilt under console control
+
+> 🔄 **Changed and started 2026-09-19.** **The mast no longer moves**: its pan/tilt pair is
+> gone and the head is the **camera's own pan/tilt, on two JX PDI-D56MG servos** (3.7–5.5 V,
+> so a regulated 5.0 V rail). Wiring: [docs/servo-wiring.md](docs/servo-wiring.md) — GPIO18/19,
+> LEDC 2–3. Wired by you the same day, which is why this step ran ahead of 3.2 on your
+> go-ahead.
+>
+> **Landed, firmware 0.2.0:** `lib/Aim` (limits, direction, angle → pulse; host-tested in
+> `test/test_aim`) and `lib/PanTilt` (LEDC) instead of the `lib/Mast` named below; `main.cpp`
+> actuates `mast` while armed, advertises `mast` in `caps` and reports `pan`/`tilt` in
+> telemetry; the console's reserved pad is live as hold-to-move plus W/A/S/D and C to centre;
+> the simulator clamps to the same limits. **No protocol version bump** — the verb keeps its
+> name and the telemetry fields were already reserved (protocol §3.4, §4.2). Flashed to the
+> rover and confirmed over Wi-Fi: `fw 0.2.0`, `caps [drive, steer3, mast]`, head at 0/0.
+>
+> **Free-run test, 2026-09-20 — in progress.** Pan direction correct; **tilt was reversed**
+> (TILT UP pointed down), fixed in firmware 0.2.1 by negating `CAM_TILT_US_PER_DEG`. The
+> console and protocol were left alone on purpose: they speak "positive = up", and the
+> firmware is what knows how the servo is mounted.
+>
+> **Servos re-positioned, both axes reversed (fw 0.2.3, 2026-09-20).** Pan went to −10 µs/°
+> and tilt back to +10. A re-mount flips the sign and nothing else: limits, console and wire
+> stay in protocol terms. A host test now pins which way each axis faces.
+>
+> **Tilt down opened to −60° (fw 0.2.2, 2026-09-20)**, from −30°, on your call that the
+> driving view needed to look further down; the pulse range went to 920–2120 µs to reach it,
+> which is the D56MG's full 120°. Tilt therefore has **no travel left in reserve** — pan
+> still has some.
+>
+> **Still owed by this step:** the rest of the free-run test in servo-wiring.md §6, which is
+> also where the direction of each axis gets confirmed and the **travel limits get measured** — pan
+> −45…45 and tilt −30…45 are deliberately narrow guesses until then. The oscillation check
+> below now applies to the camera head rather than a pole. The **return-to-driving-position**
+> control is CENTRE (0/0) for now; whether the driving position should be tilted down is a
+> call for the test.
 **Owner:** 🔧💻 · **Size:** M · **Depends on:** 3.2 · **Risk:** R8
 
 **Do:** `firmware/lib/Mast/` on the same self-contained pattern as `Drive`; two servos on

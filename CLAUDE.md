@@ -22,8 +22,9 @@ the loom, both enables strapped to VCC) and the steering motor on the **DRV8833*
 strapped to VCC). Neither chip gives the firmware an enable pin any more, so both are
 sign-magnitude on their direction inputs. **The drive forward input moved GPIO26 → GPIO32**
 in the same change: GPIO26 had degraded to 0.9 V driving forward where GPIO27 still metered a
-clean 3.3 V driving back — a damaged output driver, not a firmware fault. Still **not** procured: the servos, the camera, the sensing payload and the
-flight battery — and Phase 0 (the BOM and the power-budget decisions) is still unapproved, so
+clean 3.3 V driving back — a damaged output driver, not a firmware fault. **The camera pan/tilt servos (two D56MG) were wired on 2026-09-19 and
+firmware 0.2.0 actuates them** — free-run test pending (docs/servo-wiring.md §6). Still **not**
+procured: the camera, the sensing payload and the flight battery — and Phase 0 (the BOM and the power-budget decisions) is still unapproved, so
 the pack in §3.3 of the power budget is a recommendation rather than a part.
 
 **The mission was revised on 2026-07-27 (Revision 2): the robotic arm is gone, replaced by a
@@ -41,8 +42,12 @@ Everything from Phase 0 onward is either your decisions or blocked on procuremen
 
 **The sensing method was decided on 2026-09-14 at step 2.0: colour-and-size recognition on a
 second **ESP32-CAM** at the front mounting point — not UHF RFID.** The mast camera is
-unchanged, so the rover carries two camera boards; detection runs **on the detection board** and
-the colour code → element lookup stays **console-side** in `compositions.json`. Fiducial markers
+unchanged, so the rover carries two camera boards; 2.0 put detection **on the detection board**
+with the colour code → element lookup **console-side** in `compositions.json`. **Half of that
+changed on 2026-09-26 at step 2.0e: detection now runs on the operator PC** (~1 ms per frame
+against 2713 ms on the board), so the rover sends no `tag` frame. The console-side lookup is
+unchanged and is now more, not less, consistent with where the work happens. The on-board
+detector is built and parked. Fiducial markers
 (ArUco) are the recorded fallback, on an explicit trigger: **step 2.3 failing to reach ≥ 95%
 correct class over 100 detections.** Steps 2.1–2.7 are replaced one-for-one; the RFID versions
 are retained in the plan as history. **No protocol change** — the `tag` frame carries a colour
@@ -72,6 +77,12 @@ Driving is still the primary line of work.
   the driver runs out of thermal headroom), F8 (three motors, two bridges — the drive pair must
   share bridge A) and F9 (the L293D's 2 V drop was absorbing pack excess and limiting stall
   current, and the DRV8833 does neither)
+- [docs/servo-wiring.md](docs/servo-wiring.md) — the camera pan/tilt: **two JX PDI-D56MG**
+  on GPIO18/19, LEDC channels 2–3, their own regulated 5.0 V rail (**the D56MG maxes at
+  5.5 V** — never the 6 V motor rail or an AA pack), 330 Ω series and 10 kΩ pull-down per
+  signal. Rev B, 2026-09-19: **the mast no longer moves, so its servos are gone.** Wired and
+  actuated (fw 0.2.0) the same day; its §6 is the free-run test, which is also where the
+  travel limits and each axis's direction get confirmed
 - [console/](console/) — Godot 4 touchscreen operator console
 - [firmware/](firmware/) — PlatformIO / Arduino-ESP32 rover firmware
 
@@ -105,10 +116,17 @@ python -m platformio device monitor         # serial monitor, 115200
 python -m platformio run -t clean
 python -m platformio run -e bringup -t upload -t monitor   # step 1.1 board sanity
 python -m platformio run -e wifiscan -t upload -t monitor  # steps 1.2/0.5 Wi-Fi survey
+python -m platformio run -e motortest -t upload -t monitor # step 1.3 motor bench
+python -m platformio run -e xiaocam -t upload -t monitor   # step 2.0b.1x camera bring-up
+python -m platformio run -e xiaostream -t upload -t monitor # step 2.0b.2 Wi-Fi camera
+python -m platformio run -e xiaodetect -t upload -t monitor # step 2.0e live detection
 ```
 
-Two bench sketches sit alongside `main.cpp`, each in its own env. All three environments
-exclude the others' sources via `build_src_filter`, so nothing ever links two `setup()`s.
+**Seven bench sketches sit alongside `main.cpp`, each in its own env, and they do not all
+run on the same physical board.** Every environment excludes the others' sources via
+`build_src_filter`, so nothing ever links two `setup()`s — and `camcheck` and `xiaocam`
+additionally carry their own `board =`, because they are different silicon from the rover
+controller and must never share a build with it.
 
 - `[env:bringup]` → [src/bringup.cpp](firmware/src/bringup.cpp): blink, a serial identity
   block (chip model, MAC, reset reason) and a character echo, with **no Wi-Fi and no
@@ -121,6 +139,65 @@ exclude the others' sources via `build_src_filter`, so nothing ever links two `s
   needs no association, **this is the instrument for 1.2's RSSI-through-glass survey** and can
   be run before the arena network exists.
 
+- `[env:motortest]` → [src/motor_test.cpp](firmware/src/motor_test.cpp): step 1.3's
+  serial-driven motor bench. Drives through `lib/Drive`, so the deadband and steering
+  threshold under test are the ones the rover will run, with no Wi-Fi and no console in the
+  path to be blamed.
+- `[env:camcheck]` → [src/cam_check.cpp](firmware/src/cam_check.cpp): **ESP32-CAM**
+  bring-up (step 2.0b.1) — identity, PSRAM, sensor PID and a base64 frame down the serial
+  line, credential-free. **Built but never run**; that board is no longer the intended
+  detector. Kept as a fallback and a second camera.
+- `[env:xiaocam]` → [src/xiao_cam.cpp](firmware/src/xiao_cam.cpp): **XIAO ESP32S3 Sense**
+  bring-up (step 2.0b.1x) — the same proof on the board received 2026-09-18, which is the
+  one the detector is intended to ship on. Native USB, so no FTDI adapter and no GPIO0
+  strap; if the port will not appear, hold BOOT, tap RESET, release BOOT. Its PSRAM is
+  **OPI**, which is why `board_build.arduino.memory_type` must stay `qio_opi` — without it
+  `psramFound()` reports false on good silicon, and the flag is not the fix.
+
+- `[env:xiaostream]` → [src/xiao_stream.cpp](firmware/src/xiao_stream.cpp): the same XIAO
+  board on Wi-Fi (step 2.0b.2) — MJPEG on **:81/stream**, and `/snap`, `/status`, `/lock`,
+  `/control` on **:80**. **The only camera env that needs `secrets.h`.** Two servers on two
+  ports is not cosmetic: an MJPEG handler never returns, so a single-threaded server with a
+  stream open starves every control endpoint — that was measured here, and `/lock` timed
+  out. Its `joinWiFi()` is also the **bounded** join that `main.cpp` still lacks (defect
+  F7), and is the shape to copy when step 1.2 fixes it.
+
+- `[env:xiaodetect]` → [src/xiao_detect.cpp](firmware/src/xiao_detect.cpp): the trained
+  FOMO detector running **on** the XIAO — ⏸ **built, parked 2026-09-26**, because inference
+  moved to the host (see below). It builds and reaches inference; the heap fix in it has
+  never been flashed and verified. Same camera and two-server split as `xiaostream`, plus an
+  inference task on core 1 and a browser overlay at `/`. Also needs `secrets.h`. The model is
+  `lib/EiRockModel`, an Edge Impulse export that is **generated and gitignored** apart from
+  its hand-written `library.json`; that manifest is what makes PlatformIO compile the nested
+  SDK and, via **both** `EI_CLASSIFIER_TFLITE_ENABLE_ESP_NN` and `..._ESP_NN_S3`, the
+  ESP32-S3 vector kernels. With only the first flag the S3 assembly compiles to empty objects
+  and the link fails on undefined `*_esp32s3` symbols. Two more traps are recorded in
+  [vision/TRAINING.md](vision/TRAINING.md) §7.3: the ~300 KB tensor arena must go to PSRAM or
+  it starves Wi-Fi and the camera driver into panics that never mention inference, and
+  `heap_caps_aligned_alloc` must be freed with `heap_caps_aligned_free` or the next
+  allocation dies inside `tlsf`.
+
+Decode a dumped frame from either camera sketch with
+[tools/cam_grab.py](tools/cam_grab.py) — `python tools/cam_grab.py --port COM7 --send d`.
+A JPEG *length* proves the sensor is clocking pixels; only the image proves the picture is
+in focus, exposed and the right way up.
+
+**Rock detection runs on the host, decided 2026-09-26 (step 2.0e).** The board is a camera
+and nothing more: `xiaostream` serves MJPEG, and [vision/detect_stream.py](vision/detect_stream.py)
+pulls the stream, runs the FOMO model through `ai-edge-litert` and puts the element name on
+screen. Measured **~1 ms per frame** on the host against a **2713 ms** Studio estimate on the
+board, and a model change is a file swap rather than a reflash. **[vision/TRAINING.md](vision/TRAINING.md)
+is the procedure**, end to end — shoot, auto-label, train, measure, run — with the real
+numbers from the 2026-09-26 run in it. [vision/autolabel.py](vision/autolabel.py) is why
+nobody draws boxes: it contrasts each rock session against the empty-floor session and writes
+the boxes itself.
+
+⚠ **This departs from step 2.0's recorded design**, which has detection running on the
+detection board and the rover reporting a colour code in a `tag` frame. With host-side
+inference the rover reports nothing. That goes in 2.0's amendment review alongside the
+ESP32-CAM/XIAO and colour-thresholds/CNN drifts — all four are held together, deliberately
+unapplied.
+
 **Known defect F7**: `main.cpp`'s Wi-Fi join is an unbounded `while` loop — a wrong password or
 an absent AP hangs the board in `setup()` forever, so the WebSocket server never starts and the
 console cannot tell it from dead silicon. See IMPLEMENTATION_PLAN.md step 1.2.
@@ -130,7 +207,7 @@ The first build downloads the Xtensa toolchain and the pinned libraries. Copy
 credentials before flashing — the committed placeholder will not associate.
 
 **`python -m platformio test -e native` is the cheapest check on the firmware** and the one
-to run after touching `lib/Protocol` or `lib/Safety` — it exercises the wire format and the
+to run after touching `lib/Protocol`, `lib/Safety` or `lib/Aim` — it exercises the wire format and the
 whole failsafe contract on the PC in about three seconds, with no ESP32 in the loop. It needs
 a host compiler on `PATH`; this machine uses MinGW-w64 GCC from MSYS2 at
 `C:\msys64\ucrt64\bin` (install packages with the full path `C:\msys64\usr\bin\pacman`, which
@@ -233,8 +310,8 @@ decision:
 
 - **Control channel** — Godot touchscreen console → ESP32 over Wi-Fi (WebSocket), with
   Bluetooth as fallback. ESP32 drives **two drive motors and one steering motor** (steered
-  chassis, chosen at step 0.2 — *not* skid steer; it cannot pivot in place) and **four**
-  pan/tilt servos (mast ×2, camera ×2), and publishes telemetry and tag reads back. **Since 2.0
+  chassis, chosen at step 0.2 — *not* skid steer; it cannot pivot in place) and **two**
+  camera pan/tilt servos (D56MG; the mast no longer moves since 2026-09-19), and publishes telemetry and tag reads back. **Since 2.0
   (2026-09-14) the identification sensor is a second ESP32-CAM, not a UART reader** — it does
   its own detection and reports a colour code, so the control ESP32 relays rather than polls.
 
@@ -301,8 +378,10 @@ console, and a retired `l`/`r` makes the frame malformed (§2.3a) so it does not
 failsafe.
 
 In short: JSON text frames over a WebSocket, ESP32 as server on port 81, console as client.
-Console → rover carries a `cmd` discriminator, rover → console carries a `t`. `drive` and
-`stop` are actuated; `mast` is an accepted shape the firmware logs and ignores until Phase 3.
+Console → rover carries a `cmd` discriminator, rover → console carries a `t`. `drive`,
+`stop` and — since firmware 0.2.0 (2026-09-19) — `mast` are actuated. **`mast` is now the
+camera pan/tilt head**: the mast no longer moves, but the verb and `caps` token kept the name
+rather than break the wire (protocol §3.4).
 
 ```
 {"cmd":"drive","fwd":0.6,"steer":-1.0}  # throttle + steering, -1.0 .. 1.0; steer < 0 = left
@@ -343,6 +422,12 @@ file, otherwise it lands in the Godot user data folder and the path is printed a
 
 ## Code layout conventions
 
+- [firmware/lib/PanTilt/](firmware/lib/PanTilt/) is the camera head's hardware half and
+  [firmware/lib/Aim/](firmware/lib/Aim/) its decisions — travel limits, direction (the sign
+  of `CAM_*_US_PER_DEG`), angle → pulse. `Aim` has no Arduino headers and is host-tested in
+  `test/test_aim`, on the same split as Protocol/Safety. **The travel limits live twice**:
+  `config.h` and `HEAD_PAN_LIMITS`/`HEAD_TILT_LIMITS` in `console.gd` (and the simulator's
+  `HEAD_*_LIMITS`) — change them together.
 - [firmware/lib/Drive/](firmware/lib/Drive/) takes its pins through the constructor rather
   than including `config.h`. Subsystem modules (arm, mast) should stay self-contained the same
   way — §2 of the proposal commits to each subsystem being liftable into a future prototype.
@@ -360,7 +445,7 @@ file, otherwise it lands in the Godot user data folder and the path is printed a
   and each input needs its own channel. **The steering claims no LEDC channel at all**: it is
   three-position, so there is no speed to modulate, and step 1.3 measured that a PWM-limited
   steering channel could not shift the axle against its return spring. Channels 2 upward are
-  free for the Phase 3 servos, which need **four** (mast pan/tilt ×2, camera pan/tilt ×2).
+  free for the Phase 3 servos, which take **2 and 3** (camera pan/tilt; timer 1 at 50 Hz).
 - `Drive` runs the drive PWM at **1.5 kHz**, not the 20 kHz step 1.3 ran on the DRV8833. The
   drive motors are back behind an L293D, and a bipolar Darlington bridge cannot switch cleanly
   up there. The audible whine is the price of that part. The DRV8833 would take 20 kHz happily

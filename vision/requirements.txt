@@ -1,0 +1,8 @@
+# Desktop dependencies for the rock-recognition POC (IMPLEMENTATION_PLAN step 2.0c).
+# Install with:  python -m pip install -r vision/requirements.txt
+#
+# Nothing here ships to the rover. The board runs a TFLite Micro model produced from
+# this dataset; these packages exist only to collect and inspect it on the PC.
+
+opencv-python>=4.10   # capture, square crop, camera property locking
+numpy>=1.26           # frame arithmetic for the burst-mode novelty gate

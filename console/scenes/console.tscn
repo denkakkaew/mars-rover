@@ -87,7 +87,7 @@ text = "DRIVE ----"
 
 [node name="MastChip" type="Label" parent="Margin/Layout/Readiness/Row"]
 layout_mode = 2
-text = "MAST ----"
+text = "PAN/TILT ----"
 
 [node name="RfidChip" type="Label" parent="Margin/Layout/Readiness/Row"]
 layout_mode = 2
@@ -118,7 +118,7 @@ theme_override_constants/separation = 12
 [node name="Heading" type="Label" parent="Margin/Layout/Main/MastPanel/Column"]
 layout_mode = 2
 horizontal_alignment = 1
-text = "MAST  ·  RESERVED PHASE 3"
+text = "CAMERA  ·  PAN / TILT   (W A S D, C = centre)"
 
 [node name="Grid" type="GridContainer" parent="Margin/Layout/Main/MastPanel/Column"]
 layout_mode = 2
@@ -173,6 +173,11 @@ text = "TILT DN"
 
 [node name="MastSpacerBR" type="Control" parent="Margin/Layout/Main/MastPanel/Column/Grid"]
 layout_mode = 2
+
+[node name="HeadAngles" type="Label" parent="Margin/Layout/Main/MastPanel/Column"]
+layout_mode = 2
+horizontal_alignment = 1
+text = "PAN/TILT NOT FITTED"
 
 [node name="DrivePanel" type="PanelContainer" parent="Margin/Layout/Main"]
 layout_mode = 2

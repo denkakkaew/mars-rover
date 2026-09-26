@@ -7,8 +7,9 @@ extends Control
 ## must not look the same as one that is ready to drive. A dead console that still shows
 ## green is the failure this screen exists to prevent.
 ##
-## Scaffold state: drive pad only. Mast pan/tilt and arm controls are Phase 2/3 work and
-## get added alongside the camera feeds.
+## Drive pad, plus the camera pan/tilt pad (2026-09-19). The pan/tilt pad lives in the
+## panel the scene still calls MastPanel: the mast no longer moves, but the wire verb and
+## capability kept the name `mast` (docs/protocol.md 3.4).
 
 const DRIVE_SPEED := 1.0
 
@@ -75,6 +76,8 @@ enum Display { DISCONNECTED, CONNECTING, LINKED, SAFE_MODE, STALE, INCOMPATIBLE 
 @onready var _steering_label: Label = $Margin/Layout/Main/DrivePanel/Column/SteeringLabel
 @onready var _nudge_row: HBoxContainer = $Margin/Layout/Main/DrivePanel/Column/NudgeRow
 @onready var _mast_panel: PanelContainer = $Margin/Layout/Main/MastPanel
+@onready var _head_grid: GridContainer = $Margin/Layout/Main/MastPanel/Column/Grid
+@onready var _head_label: Label = $Margin/Layout/Main/MastPanel/Column/HeadAngles
 @onready var _analysis_panel: PanelContainer = $Margin/Layout/Main/AnalysisPanel
 
 ## Scene 1 gates the mission on drive, mast and the RFID reader all reporting green.
@@ -83,6 +86,61 @@ enum Display { DISCONNECTED, CONNECTING, LINKED, SAFE_MODE, STALE, INCOMPATIBLE 
 	"mast": $Margin/Layout/Readiness/Row/MastChip,
 	"rfid": $Margin/Layout/Readiness/Row/RfidChip,
 }
+
+## What each chip is called on screen, where that differs from its `caps` token. The
+## `mast` capability is the camera pan/tilt head now that the mast itself is fixed.
+const CHIP_NAMES := {"mast": "PAN/TILT"}
+
+# --- Camera pan/tilt head (docs/servo-wiring.md) ------------------------------------
+#
+# Hold-to-move: while a button is held the commanded angle advances at HEAD_RATE_DEG_S and
+# is sent every HEAD_SEND_SEC, as an absolute angle (docs/protocol.md 3.4). The servo holds
+# wherever it was last told, so releasing needs no command to make it safe — unlike the
+# drive, nothing has to be cut.
+
+## Mirrors CAM_PAN_*/CAM_TILT_* in firmware/include/config.h. The rover clamps too, and
+## both are required: without the console's clamp, holding PAN R past the limit would
+## wind the commanded angle on while the head stood still, and PAN L would then do
+## nothing until it had unwound. Change one, change both.
+const HEAD_PAN_LIMITS := Vector2(-45.0, 45.0)
+const HEAD_TILT_LIMITS := Vector2(-60.0, 45.0)
+
+## Slow enough to follow on the monitor, fast enough to cross the whole pan travel in
+## a little over two seconds.
+const HEAD_RATE_DEG_S := 40.0
+
+## Also what keeps the rover armed while the head moves: each frame refreshes the failsafe
+## (docs/protocol.md 6.2), and 100 ms is well inside its 500 ms window.
+const HEAD_SEND_SEC := 0.1
+
+## After sending, ignore the rover's reported angle this long. Telemetry is broadcast
+## every 500 ms, so a frame already in flight when the operator lets go would otherwise
+## snap the console back to where the head was a moment ago.
+const HEAD_ADOPT_AFTER_MS := 1000
+
+## Button name -> direction, (pan, tilt). Positive pan is right, positive tilt is up.
+const HEAD_VECTORS := {
+	"PanLeft": Vector2(-1.0, 0.0),
+	"PanRight": Vector2(1.0, 0.0),
+	"TiltUp": Vector2(0.0, 1.0),
+	"TiltDown": Vector2(0.0, -1.0),
+}
+
+## W/A/S/D aim the head the way the arrow keys drive, and C centres it.
+const KEY_TO_HEAD := {
+	KEY_W: "TiltUp",
+	KEY_S: "TiltDown",
+	KEY_A: "PanLeft",
+	KEY_D: "PanRight",
+}
+const KEY_HEAD_CENTRE := KEY_C
+
+## The pose the console last commanded, (pan, tilt) in degrees.
+var _head_pose := Vector2.ZERO
+## Head buttons currently held, name -> direction. Same reasoning as `_held`.
+var _head_held: Dictionary = {}
+var _head_send_timer := 0.0
+var _head_last_send_ms := -HEAD_ADOPT_AFTER_MS
 
 ## Drive pad button name -> (throttle, steer). Steer is negative-left, as on the wire.
 ##
@@ -188,6 +246,15 @@ func _ready() -> void:
 		elif button.name == "Stop":
 			button.pressed.connect(_link.send_stop)
 
+	for button in _head_grid.get_children():
+		if not (button is Button):
+			continue
+		if HEAD_VECTORS.has(button.name):
+			button.button_down.connect(_on_head_pressed.bind(button.name))
+			button.button_up.connect(_on_head_released.bind(button.name))
+		elif button.name == "MastCentre":
+			button.pressed.connect(_centre_head)
+
 	# Fine drive (step S.13). Nudges are `pressed`, not hold-to-drive: the whole point
 	# is a step whose length the link decides, not one the operator has to time.
 	for button in _nudge_row.get_children():
@@ -230,6 +297,19 @@ func _input(event: InputEvent) -> void:
 			_link.send_stop()
 			_refresh_steering_label()
 		get_viewport().set_input_as_handled()
+		return
+
+	if KEY_TO_HEAD.has(key.keycode) or key.keycode == KEY_HEAD_CENTRE:
+		get_viewport().set_input_as_handled()
+		if not _head_enabled():
+			return
+		if key.keycode == KEY_HEAD_CENTRE:
+			if key.pressed:
+				_centre_head()
+		elif key.pressed:
+			_on_head_pressed(KEY_TO_HEAD[key.keycode])
+		else:
+			_on_head_released(KEY_TO_HEAD[key.keycode])
 		return
 
 	if not KEY_TO_BUTTON.has(key.keycode):
@@ -276,6 +356,88 @@ func _highlight_held() -> void:
 	for button in _drive_pad.get_children():
 		if button is Button and DRIVE_VECTORS.has(button.name):
 			button.modulate = COLOR_READY if _held.has(String(button.name)) else Color.WHITE
+
+
+# --- Camera pan/tilt ------------------------------------------------------------------
+
+func _on_head_pressed(name: StringName) -> void:
+	_head_held[String(name)] = HEAD_VECTORS[String(name)]
+	_send_head()  # respond on the press, not a tick later
+	_highlight_head()
+
+
+func _on_head_released(name: StringName) -> void:
+	_head_held.erase(String(name))
+	# The final angle, so the head stops where the operator let go rather than up to
+	# HEAD_SEND_SEC short of it.
+	_send_head()
+	_highlight_head()
+
+
+func _centre_head() -> void:
+	_head_held.clear()
+	_head_pose = Vector2.ZERO
+	_send_head()
+	_highlight_head()
+
+
+func _process(delta: float) -> void:
+	if _head_held.is_empty():
+		return
+	var direction := Vector2.ZERO
+	for vector: Vector2 in _head_held.values():
+		direction += vector
+	_head_pose = _clamp_head(_head_pose + direction * HEAD_RATE_DEG_S * delta)
+	_refresh_head_label()
+
+	_head_send_timer += delta
+	if _head_send_timer >= HEAD_SEND_SEC:
+		_send_head()
+
+
+func _send_head() -> void:
+	_head_send_timer = 0.0
+	_head_last_send_ms = Time.get_ticks_msec()
+	_link.send_mast(_head_pose.x, _head_pose.y)
+	_refresh_head_label()
+
+
+func _clamp_head(pose: Vector2) -> Vector2:
+	return Vector2(
+		clampf(pose.x, HEAD_PAN_LIMITS.x, HEAD_PAN_LIMITS.y),
+		clampf(pose.y, HEAD_TILT_LIMITS.x, HEAD_TILT_LIMITS.y))
+
+
+func _head_enabled() -> bool:
+	return _pad_enabled() and _link.has_capability("mast")
+
+
+func _highlight_head() -> void:
+	for button in _head_grid.get_children():
+		if button is Button and HEAD_VECTORS.has(button.name):
+			button.modulate = COLOR_READY if _head_held.has(String(button.name)) else Color.WHITE
+
+
+func _refresh_head_label() -> void:
+	if not _link.has_capability("mast"):
+		_head_label.text = "PAN/TILT NOT FITTED"
+		return
+	_head_label.text = "PAN %+.0f°   TILT %+.0f°" % [_head_pose.x, _head_pose.y]
+
+
+## Same gating as the drive pad, plus the capability: a rover that did not advertise
+## `mast` gets no pan/tilt commands at all (docs/protocol.md 4.1).
+func _refresh_head_pad() -> void:
+	var enabled := _head_enabled()
+	for button in _head_grid.get_children():
+		if button is Button:
+			button.disabled = not enabled
+	_mast_panel.modulate = Color.WHITE if enabled else Color(1, 1, 1, 0.35)
+	if not enabled:
+		# A disabled Button never emits button_up — see _refresh_drive_pad.
+		_head_held.clear()
+		_highlight_head()
+	_refresh_head_label()
 
 
 func _on_nudge_pressed(vector: Vector2) -> void:
@@ -378,6 +540,9 @@ func _notification(what: int) -> void:
 		if is_instance_valid(_link):
 			_held.clear()
 			_link.release_drive()
+			# No command needed for the head — it holds where it is — but a held pan must
+			# not carry on winding the angle while the window is away.
+			_head_held.clear()
 
 
 func _capture_and_quit(path: String) -> void:
@@ -487,6 +652,14 @@ func _on_telemetry_received(data: Dictionary) -> void:
 		else:
 			_battery_label.modulate = COLOR_READY
 
+	# Adopt the rover's pose while idle, so a console that connects to a head it did not
+	# aim — or one that rebooted and re-centred — starts from where the head really is.
+	var idle_ms := Time.get_ticks_msec() - _head_last_send_ms
+	if data.has("pan") and data.has("tilt") and _head_held.is_empty() \
+			and idle_ms >= HEAD_ADOPT_AFTER_MS:
+		_head_pose = _clamp_head(Vector2(float(data["pan"]), float(data["tilt"])))
+		_refresh_head_label()
+
 	if data.has("rssi"):
 		var rssi := int(data["rssi"])
 		_rssi_label.text = "RSSI %d dBm" % rssi
@@ -585,6 +758,7 @@ func _refresh() -> void:
 
 	_refresh_chips()
 	_refresh_drive_pad()
+	_refresh_head_pad()
 
 
 ## Scene 1: drive, arm and mast all report green before the operator may proceed.
@@ -595,14 +769,15 @@ func _refresh_chips() -> void:
 	var live := _display == Display.LINKED or _display == Display.SAFE_MODE
 	for subsystem in _chips:
 		var chip: Label = _chips[subsystem]
+		var shown: String = CHIP_NAMES.get(subsystem, subsystem.to_upper())
 		if not _link.has_capability(subsystem):
-			chip.text = "%s NOT FITTED" % subsystem.to_upper()
+			chip.text = "%s NOT FITTED" % shown
 			chip.modulate = COLOR_IDLE
 		elif live:
-			chip.text = "%s READY" % subsystem.to_upper()
+			chip.text = "%s READY" % shown
 			chip.modulate = COLOR_READY
 		else:
-			chip.text = "%s NO DATA" % subsystem.to_upper()
+			chip.text = "%s NO DATA" % shown
 			chip.modulate = COLOR_FAULT
 
 
