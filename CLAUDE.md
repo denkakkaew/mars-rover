@@ -467,7 +467,14 @@ file, otherwise it lands in the Godot user data folder and the path is printed a
 - Env vars drive the console for development, none of which change committed defaults:
   `ROVER_URL` (point at the simulator), `RTT_LOG` (latency CSV path), `CONSOLE_SHOT` /
   `CONSOLE_SHOT_DELAY` (capture a PNG after N seconds and exit), `COMPOSITION_TABLE`
-  (alternative tag→composition file).
+  (alternative tag→composition file), `DETECTION_API_PORT` / `DETECTION_API_BIND` (where
+  the detector's API listens; default `127.0.0.1:8765`).
+- [console/scripts/detection_api.gd](console/scripts/detection_api.gd) is the console's
+  one inbound API: `POST /detection {"element","label","confidence"}` from
+  [vision/detect_stream.py](vision/detect_stream.py), which only reports detections at or
+  above `--min-confidence` (0.70). The analysis panel inserts an element into the session
+  log **once per name** (case-insensitive) and answers `{"added": false}` for a duplicate.
+  It never touches the rover link — detection stays off the control channel.
 - **[console/data/compositions.json](console/data/compositions.json) maps tag ID → simulated
   elemental composition**, and is console-side on purpose: the rover only ever reports a tag
   ID, so an arena can be re-dressed and re-tagged without reflashing anything. Lookup order is

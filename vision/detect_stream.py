@@ -7,6 +7,7 @@ times faster than the ESP32-S3 and a model can be swapped without reflashing any
 
     python vision/detect_stream.py --url http://192.168.1.39
     python vision/detect_stream.py --url http://192.168.1.39 --threshold 0.7
+    python vision/detect_stream.py --url http://192.168.1.39 --no-console
     python vision/detect_stream.py --bench 200          # measure, no window
     python vision/detect_stream.py --source ./some/frames/   # replay stills, no board
 
@@ -27,6 +28,16 @@ frame reaches it as the middle 480x480 scaled down. The outer 80 px columns are 
 the video and invisible to the detector. Coordinates are mapped back to full-frame pixels
 before anything is drawn, so the overlay lines up with the video.
 
+ONLY CONFIDENT ROCKS COUNT. A detection whose best cell is under --min-confidence (70% by
+default) is neither drawn nor reported. --threshold still decides which cells join a blob;
+--min-confidence decides whether the blob as a whole is believed.
+
+THE CONSOLE IS TOLD. Every confident detection is POSTed to the operator console's
+detection API (console/scripts/detection_api.gd, default http://127.0.0.1:8765), which
+adds the element to its session log unless that name is already there. The posts go from
+a background thread and each element is re-sent at most every --report-every seconds, so
+a console that is closed or slow costs the video nothing.
+
 Keys in the window: q or Esc quits, s saves the current frame with its overlay, space
 pauses.
 """
@@ -35,8 +46,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import queue
 import sys
+import threading
 import time
+import urllib.request
 from collections import deque
 from pathlib import Path
 
@@ -55,6 +69,8 @@ IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 BACKGROUND_CHANNEL = 0
 
 WINDOW = "rock detection"
+
+DEFAULT_CONSOLE = "http://127.0.0.1:8765"
 
 
 # --------------------------------------------------------------------------- model
@@ -282,6 +298,56 @@ class FolderSource:
         pass
 
 
+# --------------------------------------------------------------------------- console
+
+
+class ConsoleReporter:
+    """Tells the operator console about detected elements, off the video thread.
+
+    The console de-duplicates by name, so this only has to keep the chatter down: one
+    rock in view is a detection on every frame, and there is no reason to send thirty
+    identical posts a second. Each element is sent again after `every` seconds, which
+    also covers a console that was started after the detector.
+    """
+
+    def __init__(self, base_url: str, every: float = 2.0, timeout: float = 0.5):
+        self.url = base_url.rstrip("/") + "/detection"
+        self.every = every
+        self.timeout = timeout
+        self.last_sent: dict[str, float] = {}
+        self.q: queue.Queue = queue.Queue(maxsize=16)
+        self.warned = False
+        threading.Thread(target=self._run, daemon=True).start()
+        print("console: reporting to %s" % self.url)
+
+    def report(self, element: str, label: str, confidence: float) -> None:
+        now = time.monotonic()
+        if now - self.last_sent.get(element, -1e9) < self.every:
+            return
+        self.last_sent[element] = now
+        try:
+            self.q.put_nowait({"element": element, "label": label,
+                               "confidence": round(confidence, 3)})
+        except queue.Full:
+            pass  # the console is not keeping up; dropping beats stalling the video
+
+    def _run(self) -> None:
+        while True:
+            body = self.q.get()
+            req = urllib.request.Request(self.url, data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                    reply = json.loads(r.read() or b"{}")
+                if reply.get("added"):
+                    print("console: added %s" % body["element"])
+                self.warned = False
+            except Exception as e:  # noqa: BLE001 - a missing console is not fatal
+                if not self.warned:
+                    print("console unreachable (%s); still detecting" % e)
+                    self.warned = True
+
+
 # --------------------------------------------------------------------------- labels
 
 
@@ -360,11 +426,11 @@ def draw(frame, dets, labels, elements, fps, infer_ms, threshold):
                 colour, 2, cv2.LINE_AA)
 
     h = frame.shape[0]
-    cv2.putText(frame, "%.1f fps | %.1f ms inference | threshold %.2f"
-                % (fps, infer_ms, threshold), (12, h - 14),
+    cv2.putText(frame, "%.1f fps | %.1f ms inference | min confidence %.0f%%"
+                % (fps, infer_ms, threshold * 100), (12, h - 14),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 4, cv2.LINE_AA)
-    cv2.putText(frame, "%.1f fps | %.1f ms inference | threshold %.2f"
-                % (fps, infer_ms, threshold), (12, h - 14),
+    cv2.putText(frame, "%.1f fps | %.1f ms inference | min confidence %.0f%%"
+                % (fps, infer_ms, threshold * 100), (12, h - 14),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
     return frame
 
@@ -383,6 +449,15 @@ def main(argv=None) -> int:
                                     "(default: the training folder names)")
     p.add_argument("--threshold", type=float, default=0.5,
                    help="confidence a cell needs to count (default 0.5)")
+    p.add_argument("--min-confidence", type=float, default=0.7,
+                   help="confidence a detection needs to be shown or reported "
+                        "(default 0.7)")
+    p.add_argument("--console", default=DEFAULT_CONSOLE,
+                   help="operator console detection API (default %s)" % DEFAULT_CONSOLE)
+    p.add_argument("--no-console", action="store_true",
+                   help="detect and display only; tell the console nothing")
+    p.add_argument("--report-every", type=float, default=2.0,
+                   help="seconds before the same element is re-sent (default 2)")
     p.add_argument("--bench", type=int, metavar="N",
                    help="time N frames with no window, print the numbers, exit")
     args = p.parse_args(argv)
@@ -400,6 +475,8 @@ def main(argv=None) -> int:
 
     source = FolderSource(Path(args.source)) if args.source \
         else StreamSource(args.url, args.stream_port)
+    reporter = None if args.no_console or args.bench \
+        else ConsoleReporter(args.console, args.report_every)
 
     recent = deque(maxlen=30)
     infer_recent = deque(maxlen=30)
@@ -429,7 +506,13 @@ def main(argv=None) -> int:
 
             blobs = cells_to_blobs(grid, args.threshold)
             dets = [to_frame_coords(b, grid.shape[0], grid.shape[1], cx0, cy0, side)
-                    for b in blobs]
+                    for b in blobs if b["value"] >= args.min_confidence]
+
+            if reporter is not None:
+                for d in dets:
+                    if 0 < d["class"] <= len(model.labels):
+                        name = model.labels[d["class"] - 1]
+                        reporter.report(elements.get(name) or name, name, d["value"])
 
             recent.append(time.perf_counter())
             fps = (len(recent) - 1) / (recent[-1] - recent[0]) if len(recent) > 1 else 0.0
@@ -446,7 +529,7 @@ def main(argv=None) -> int:
                 continue
 
             draw(frame, dets, model.labels, elements, fps,
-                 float(np.mean(infer_recent)), args.threshold)
+                 float(np.mean(infer_recent)), args.min_confidence)
             cv2.imshow(WINDOW, frame)
 
             key = cv2.waitKey(1) & 0xFF
