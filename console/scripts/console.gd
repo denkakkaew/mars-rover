@@ -7,9 +7,12 @@ extends Control
 ## must not look the same as one that is ready to drive. A dead console that still shows
 ## green is the failure this screen exists to prevent.
 ##
-## Drive pad, plus the camera pan/tilt pad (2026-09-19). The pan/tilt pad lives in the
-## panel the scene still calls MastPanel: the mast no longer moves, but the wire verb and
-## capability kept the name `mast` (docs/protocol.md 3.4).
+## Drive stick, plus the camera pan/tilt stick (2026-09-19). The pan/tilt stick lives in
+## the panel the scene still calls MastPanel: the mast no longer moves, but the wire verb
+## and capability kept the name `mast` (docs/protocol.md 3.4).
+##
+## Both are game-style thumbsticks (virtual_joystick.gd) rather than button grids, since
+## the ui-improve branch: proportional throttle and proportional aim rate, one thumb each.
 
 const DRIVE_SPEED := 1.0
 
@@ -71,21 +74,25 @@ enum Display { DISCONNECTED, CONNECTING, LINKED, SAFE_MODE, STALE, INCOMPATIBLE 
 @onready var _rtt_label: Label = $Margin/Layout/Telemetry/Strip/RttLabel
 @onready var _firmware_label: Label = $Margin/Layout/Readiness/Row/FirmwareLabel
 @onready var _drive_panel: PanelContainer = $Margin/Layout/Main/DrivePanel
-@onready var _drive_pad: GridContainer = $Margin/Layout/Main/DrivePanel/Column/DrivePad
-@onready var _speed_button: Button = $Margin/Layout/Main/DrivePanel/Column/SpeedMode
+@onready var _drive_stick: VirtualJoystick = $Margin/Layout/Main/DrivePanel/Column/DriveStick
+@onready var _stop_button: Button = $Margin/Layout/Main/DrivePanel/Column/ActionRow/Stop
+@onready var _speed_button: Button = $Margin/Layout/Main/DrivePanel/Column/ActionRow/SpeedMode
 @onready var _steering_label: Label = $Margin/Layout/Main/DrivePanel/Column/SteeringLabel
 @onready var _nudge_row: HBoxContainer = $Margin/Layout/Main/DrivePanel/Column/NudgeRow
 @onready var _mast_panel: PanelContainer = $Margin/Layout/Main/MastPanel
-@onready var _head_grid: GridContainer = $Margin/Layout/Main/MastPanel/Column/Grid
+@onready var _head_stick: VirtualJoystick = $Margin/Layout/Main/MastPanel/Column/HeadStick
+@onready var _head_centre: Button = $Margin/Layout/Main/MastPanel/Column/MastCentre
 @onready var _head_label: Label = $Margin/Layout/Main/MastPanel/Column/HeadAngles
 @onready var _analysis_panel: PanelContainer = $Margin/Layout/Main/AnalysisPanel
 
-## Scene 1 gates the mission on drive, mast and the RFID reader all reporting green.
+## Scene 1 gates the mission on drive, pan/tilt and the rock detector all reporting green.
+## The first two are rover capabilities from the handshake; the detector runs on this PC
+## (vision/detect_stream.py) and is live while its snapshots keep arriving.
 @onready var _chips := {
 	"drive": $Margin/Layout/Readiness/Row/DriveChip,
 	"mast": $Margin/Layout/Readiness/Row/MastChip,
-	"rfid": $Margin/Layout/Readiness/Row/RfidChip,
 }
+@onready var _detector_chip: Label = $Margin/Layout/Readiness/Row/DetectorChip
 
 ## What each chip is called on screen, where that differs from its `caps` token. The
 ## `mast` capability is the camera pan/tilt head now that the mast itself is fixed.
@@ -93,8 +100,9 @@ const CHIP_NAMES := {"mast": "PAN/TILT"}
 
 # --- Camera pan/tilt head (docs/servo-wiring.md) ------------------------------------
 #
-# Hold-to-move: while a button is held the commanded angle advances at HEAD_RATE_DEG_S and
-# is sent every HEAD_SEND_SEC, as an absolute angle (docs/protocol.md 3.4). The servo holds
+# Hold-to-move: while the stick is deflected (or a key held) the commanded angle advances
+# at up to HEAD_RATE_DEG_S, scaled by the deflection, and is sent every HEAD_SEND_SEC as
+# an absolute angle (docs/protocol.md 3.4). A small push is a slow, fine aim. The servo holds
 # wherever it was last told, so releasing needs no command to make it safe — unlike the
 # drive, nothing has to be cut.
 
@@ -118,7 +126,8 @@ const HEAD_SEND_SEC := 0.1
 ## snap the console back to where the head was a moment ago.
 const HEAD_ADOPT_AFTER_MS := 1000
 
-## Button name -> direction, (pan, tilt). Positive pan is right, positive tilt is up.
+## Key name -> direction, (pan, tilt). Positive pan is right, positive tilt is up — the
+## same axes as VirtualJoystick.value, so the stick's value drops straight into the sum.
 const HEAD_VECTORS := {
 	"PanLeft": Vector2(-1.0, 0.0),
 	"PanRight": Vector2(1.0, 0.0),
@@ -142,9 +151,14 @@ var _head_held: Dictionary = {}
 var _head_send_timer := 0.0
 var _head_last_send_ms := -HEAD_ADOPT_AFTER_MS
 
-## Drive pad button name -> (throttle, steer). Steer is negative-left, as on the wire.
+## Entry in `_held` / `_head_held` for a thumbstick. It sits alongside keyboard entries,
+## so a key and the stick sum exactly as two keys do.
+const STICK := "Stick"
+
+## Keyboard drive name -> (throttle, steer). Steer is negative-left, as on the wire. The
+## drive stick contributes its own (throttle, steer) under STICK.
 ##
-## **The two axes are separate, and buttons combine** (step S.15). FORWARD sets throttle
+## **The two axes are separate, and inputs combine** (step S.15). FORWARD sets throttle
 ## and nothing else; LEFT sets steering and nothing else. Held together they make a
 ## turn, which on a steered chassis is the only kind of turn there is — under the old
 ## skid-steer pad, LEFT alone pivoted the rover on the spot, and that manoeuvre no longer
@@ -225,10 +239,11 @@ func _ready() -> void:
 	_link.telemetry_stale_changed.connect(_on_stale_changed)
 	_link.handshake_completed.connect(_on_handshake_completed)
 	_link.rtt_updated.connect(_on_rtt_updated)
-	_link.tag_read.connect(_on_tag_read)
 	_rtt_log.open()
 	print("Analysis: %s" % _analysis_panel.table_summary())
 	_detection_api.handler = _on_detection
+	_detection_api.view_handler = _analysis_panel.on_view
+	_analysis_panel.detector_state_changed.connect(_on_detector_state_changed)
 	add_child(_detection_api)
 	_schedule_touch_audit()
 
@@ -239,27 +254,16 @@ func _ready() -> void:
 	if shot != "":
 		_capture_and_quit(shot)
 
-	for button in _drive_pad.get_children():
-		if not (button is Button):
-			continue
-		if DRIVE_VECTORS.has(button.name):
-			# Hold-to-drive: the rover stops as soon as the operator lifts off. The
-			# link repeats the command while held, because the rover cuts the motors
-			# after 500 ms of silence (docs/protocol.md 6.5).
-			var vector: Vector2 = DRIVE_VECTORS[button.name]
-			button.button_down.connect(_on_drive_pressed.bind(button.name, vector))
-			button.button_up.connect(_on_drive_released.bind(button.name))
-		elif button.name == "Stop":
-			button.pressed.connect(_link.send_stop)
+	# Hold-to-drive: the rover stops as soon as the operator lifts off. The link repeats
+	# the command while held, because the rover cuts the motors after 500 ms of silence
+	# (docs/protocol.md 6.5).
+	_drive_stick.moved.connect(_on_drive_stick_moved)
+	_drive_stick.released.connect(_on_drive_stick_released)
+	_stop_button.pressed.connect(_on_stop_pressed)
 
-	for button in _head_grid.get_children():
-		if not (button is Button):
-			continue
-		if HEAD_VECTORS.has(button.name):
-			button.button_down.connect(_on_head_pressed.bind(button.name))
-			button.button_up.connect(_on_head_released.bind(button.name))
-		elif button.name == "MastCentre":
-			button.pressed.connect(_centre_head)
+	_head_stick.moved.connect(_on_head_stick_moved)
+	_head_stick.released.connect(_on_head_stick_released)
+	_head_centre.pressed.connect(_centre_head)
 
 	# Fine drive (step S.13). Nudges are `pressed`, not hold-to-drive: the whole point
 	# is a step whose length the link decides, not one the operator has to time.
@@ -275,14 +279,33 @@ func _ready() -> void:
 	_refresh()
 
 
-func _on_drive_pressed(name: StringName, vector: Vector2) -> void:
-	_held[String(name)] = vector
+## Stick up is forward, stick right is right. Inside the dead zone the stick asks for
+## nothing, which is a release rather than a held zero — a thumb resting on the knob must
+## not keep the rover armed at zero throttle.
+##
+## Steering goes out as the raw deflection; a three-position rover rounds it at ±0.5, and
+## the stick draws that threshold so the operator can see where lock engages.
+func _on_drive_stick_moved(value: Vector2) -> void:
+	if value == Vector2.ZERO:
+		_held.erase(STICK)
+	else:
+		_held[STICK] = Vector2(value.y * DRIVE_SPEED, value.x * STEER_DEMAND)
 	_apply_pad()
 
 
-func _on_drive_released(name: StringName) -> void:
-	_held.erase(String(name))
+func _on_drive_stick_released() -> void:
+	_held.erase(STICK)
 	_apply_pad()
+
+
+## STOP also lets go of the stick, so a thumb still on it cannot re-arm the rover the
+## next frame it moves.
+func _on_stop_pressed() -> void:
+	_drive_stick.release()
+	_held.clear()
+	_link.send_stop()
+	_refresh_steering_label()
+	_highlight_held()
 
 
 ## Keyboard driving. Handled in _input rather than _unhandled_key_input, and marked
@@ -299,9 +322,7 @@ func _input(event: InputEvent) -> void:
 
 	if key.keycode == KEY_STOP:
 		if key.pressed:
-			_held.clear()
-			_link.send_stop()
-			_refresh_steering_label()
+			_on_stop_pressed()
 		get_viewport().set_input_as_handled()
 		return
 
@@ -343,6 +364,7 @@ func _apply_pad() -> void:
 	if _held.is_empty():
 		_link.release_drive()
 		_refresh_steering_label()
+		_highlight_held()
 		return
 
 	var throttle := 0.0
@@ -355,16 +377,49 @@ func _apply_pad() -> void:
 	_highlight_held()
 
 
-## Lights the pad buttons that are currently held. On-screen presses show their own state,
-## but a keyboard press otherwise gives no on-screen confirmation at all — and an operator
-## who cannot tell whether the key registered will press it again.
+## Shows the keyboard's command on the drive stick's knob. A thumb shows its own state,
+## but a key press otherwise gives no on-screen confirmation at all — and an operator who
+## cannot tell whether the key registered will press it again.
 func _highlight_held() -> void:
-	for button in _drive_pad.get_children():
-		if button is Button and DRIVE_VECTORS.has(button.name):
-			button.modulate = COLOR_READY if _held.has(String(button.name)) else Color.WHITE
+	_drive_stick.show_value(_keyboard_sum(_held, true))
+
+
+## Sum of the keyboard entries only, as stick axes (x right, y up). `drive` swaps the
+## (throttle, steer) order the drive entries are stored in.
+func _keyboard_sum(held: Dictionary, drive: bool) -> Vector2:
+	var total := Vector2.ZERO
+	for name: String in held:
+		if name == STICK:
+			continue
+		var vector: Vector2 = held[name]
+		total += Vector2(vector.y, vector.x) if drive else vector
+	return total
 
 
 # --- Camera pan/tilt ------------------------------------------------------------------
+
+## Deflection is a rate, not a position: the head keeps turning while the stick is held
+## over, and stays put where the operator lets go. The first deflection sends at once,
+## like a key press; after that _process carries it.
+func _on_head_stick_moved(value: Vector2) -> void:
+	var was_held := _head_held.has(STICK)
+	if value == Vector2.ZERO:
+		_head_held.erase(STICK)
+		if was_held:
+			_send_head()
+	else:
+		_head_held[STICK] = value
+		if not was_held:
+			_send_head()
+
+
+func _on_head_stick_released() -> void:
+	# Not when the release came from the stick being disabled under the finger — the
+	# link is no longer one to send to.
+	if _head_held.erase(STICK) and _head_enabled():
+		# The final angle, as for a key release.
+		_send_head()
+
 
 func _on_head_pressed(name: StringName) -> void:
 	_head_held[String(name)] = HEAD_VECTORS[String(name)]
@@ -381,6 +436,7 @@ func _on_head_released(name: StringName) -> void:
 
 
 func _centre_head() -> void:
+	_head_stick.release()
 	_head_held.clear()
 	_head_pose = Vector2.ZERO
 	_send_head()
@@ -419,9 +475,7 @@ func _head_enabled() -> bool:
 
 
 func _highlight_head() -> void:
-	for button in _head_grid.get_children():
-		if button is Button and HEAD_VECTORS.has(button.name):
-			button.modulate = COLOR_READY if _head_held.has(String(button.name)) else Color.WHITE
+	_head_stick.show_value(_keyboard_sum(_head_held, false))
 
 
 func _refresh_head_label() -> void:
@@ -435,12 +489,11 @@ func _refresh_head_label() -> void:
 ## `mast` gets no pan/tilt commands at all (docs/protocol.md 4.1).
 func _refresh_head_pad() -> void:
 	var enabled := _head_enabled()
-	for button in _head_grid.get_children():
-		if button is Button:
-			button.disabled = not enabled
+	_head_centre.disabled = not enabled
+	_head_stick.disabled = not enabled
 	_mast_panel.modulate = Color.WHITE if enabled else Color(1, 1, 1, 0.35)
 	if not enabled:
-		# A disabled Button never emits button_up — see _refresh_drive_pad.
+		# A disabled control never reports its release — see _refresh_drive_pad.
 		_head_held.clear()
 		_highlight_head()
 	_refresh_head_label()
@@ -531,12 +584,12 @@ func _on_rtt_updated(rtt: int, p95: int) -> void:
 	_rtt_log.append(rtt, p95, loss, _last_telemetry)
 
 
-func _on_tag_read(tag_id: String, rssi: int, rover_ts_ms: int) -> void:
-	_analysis_panel.on_tag_read(tag_id, rssi, rover_ts_ms)
+func _on_detection(element: String, label: String, confidence: float) -> bool:
+	return _analysis_panel.on_detection(element, label, confidence)
 
 
-func _on_detection(element: String, _label: String, confidence: float) -> bool:
-	return _analysis_panel.on_detection(element, confidence)
+func _on_detector_state_changed(_online: bool) -> void:
+	_refresh_chips()
 
 
 func _exit_tree() -> void:
@@ -548,6 +601,10 @@ func _exit_tree() -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_WM_CLOSE_REQUEST:
 		if is_instance_valid(_link):
+			# A finger on a stick when the window goes is a release that will never be
+			# delivered, exactly like a held key.
+			_drive_stick.release()
+			_head_stick.release()
 			_held.clear()
 			_link.release_drive()
 			# No command needed for the head — it holds where it is — but a held pan must
@@ -558,8 +615,8 @@ func _notification(what: int) -> void:
 func _capture_and_quit(path: String) -> void:
 	# Long enough for the link to come up and telemetry to populate the strip, so the
 	# capture shows a working console rather than its disconnected state. Override with
-	# CONSOLE_SHOT_DELAY when the interesting state takes longer to reach — a tag read,
-	# say, which needs the rover driven across the arena first.
+	# CONSOLE_SHOT_DELAY when the interesting state takes longer to reach — a detection,
+	# say, which needs the detector running and a rock in front of the camera.
 	var delay := 4.0
 	var override := OS.get_environment("CONSOLE_SHOT_DELAY")
 	if override != "":
@@ -602,13 +659,17 @@ func _audit_touch_targets() -> void:
 	var undersized := 0
 	var lines: Array[String] = []
 
-	for button in _interactive_controls():
-		var size := button.size
+	for control in _interactive_controls():
+		var size := control.size
+		if control is VirtualJoystick:
+			# The target is the drawn circle, not the rectangle it sits in.
+			var diameter := minf(size.x, size.y)
+			size = Vector2(diameter, diameter)
 		var ok := size.x >= minimum and size.y >= minimum
 		if not ok:
 			undersized += 1
 		lines.append("    %-10s %4d x %4d px   %5.1f x %5.1f mm   %s" % [
-			button.name, size.x, size.y, size.x / ppmm, size.y / ppmm,
+			control.name, size.x, size.y, size.x / ppmm, size.y / ppmm,
 			"ok" if ok else "UNDERSIZED"])
 
 	var viewport := get_viewport_rect().size
@@ -631,10 +692,12 @@ func _audit_touch_targets() -> void:
 		print("    all %d controls clear %.0f mm" % [lines.size(), MIN_TOUCH_MM])
 
 
-func _interactive_controls() -> Array[Button]:
-	var found: Array[Button] = []
+func _interactive_controls() -> Array[Control]:
+	var found: Array[Control] = [_drive_stick, _head_stick]
+	var buttons: Array[Button] = []
 	for root in [_drive_panel, _mast_panel, _analysis_panel]:
-		_collect_buttons(root, found)
+		_collect_buttons(root, buttons)
+	found.append_array(buttons)
 	return found
 
 
@@ -771,7 +834,7 @@ func _refresh() -> void:
 	_refresh_head_pad()
 
 
-## Scene 1: drive, arm and mast all report green before the operator may proceed.
+## Scene 1: drive, pan/tilt and the detector all report green before the operator may proceed.
 ## A subsystem the rover did not advertise in `caps` is shown as NOT FITTED rather than
 ## as a fault — during Phases S and 1 only the drive exists, and a permanently red row
 ## would train the operator to ignore it.
@@ -789,6 +852,15 @@ func _refresh_chips() -> void:
 		else:
 			chip.text = "%s NO DATA" % shown
 			chip.modulate = COLOR_FAULT
+
+	# Amber rather than red when down: the rover is fine, and the detector is usually just
+	# not started yet — but the mission cannot identify anything without it.
+	if _analysis_panel.detector_online():
+		_detector_chip.text = "DETECTOR LIVE"
+		_detector_chip.modulate = COLOR_READY
+	else:
+		_detector_chip.text = "DETECTOR OFFLINE"
+		_detector_chip.modulate = COLOR_WARN
 
 
 ## The drive pad is live only when the link genuinely is. Safe mode still allows driving
@@ -810,6 +882,7 @@ func _refresh_drive_pad() -> void:
 	_collect_buttons(_drive_panel, buttons)
 	for button in buttons:
 		button.disabled = not enabled
+	_drive_stick.disabled = not enabled
 	_drive_panel.modulate = Color.WHITE if enabled else Color(1, 1, 1, 0.35)
 
 	if not enabled:

@@ -41,23 +41,20 @@ so a bad layout reports itself rather than being discovered on the bench:
 ```
 Touch audit — assuming 15.6" 1920x1080 panel, 5.56 px/mm, 83 px minimum
     viewport actually 1920 x 1080
-    Forward     249 x  256 px    44.8 x  46.0 mm   ok
-    Left        250 x  256 px    45.0 x  46.0 mm   ok
-    Stop        249 x  256 px    44.8 x  46.0 mm   ok
-    Right       249 x  256 px    44.8 x  46.0 mm   ok
-    Back        249 x  256 px    44.8 x  46.0 mm   ok
-    TiltUp      167 x  258 px    30.0 x  46.4 mm   ok
-    PanLeft     137 x  257 px    24.6 x  46.2 mm   ok
+    DriveStick  461 x  461 px    82.9 x  82.9 mm   ok
+    HeadStick   636 x  636 px   114.4 x 114.4 mm   ok
+    Stop        328 x  100 px    59.0 x  18.0 mm   ok
+    SpeedMode   329 x  100 px    59.2 x  18.0 mm   ok
+    NudgeLeft   157 x  100 px    28.2 x  18.0 mm   ok
     ...
-    all 10 controls clear 15 mm
+    all 9 controls clear 15 mm
 ```
 
-The smallest control is `PanLeft` at **24.6 mm**, still 1.6× the minimum. Drive buttons are
-44.8 × 46.0 mm, roughly three times the minimum in each axis, because they are the ones
-pressed under time pressure.
-
-The count dropped from 16 to 10 at step S.9, when Revision 2 removed the arm and its six
-buttons. The analysis panel that replaced them has no touch targets of its own yet.
+**The drive and camera controls are thumbsticks, not button grids** (branch `ui-improve`,
+[virtual_joystick.gd](../console/scripts/virtual_joystick.gd)). A stick is audited on the
+diameter of its drawn circle, not the rectangle it sits in. The smallest targets are now
+the 100 px rows (STOP, SPEED, the nudges, CENTRE) at 18.0 mm — 1.2× the minimum on their
+short axis.
 
 The audit warns and marks its own figures untrustworthy if the viewport is not the assumed
 size — which is what happens in a headless run, where there is no window and the viewport
@@ -70,18 +67,17 @@ run at the target resolution.**
 +------------------------------------------------------------------------------+
 | TELEMETRY STRIP            link · mode · battery · rssi · rtt/p95             |  ~72 px
 +------------------------------------------------------------------------------+
-| SUBSYSTEMS   drive · mast · rfid                             firmware / caps  |  ~72 px
+| SUBSYSTEMS   drive · pan/tilt · detector                     firmware / caps  |  ~72 px
 +---------------------+--------------------------------+-----------------------+
 |                     |                                |                       |
-|  MAST               |  DRIVE                         |  ANALYSIS             |
-|  reserved, step 3.4 |  live now                      |  reserved, step S.11  |
+|  CAMERA PAN/TILT    |  DRIVE                         |  ANALYSIS             |
 |                     |                                |                       |
-|      [ TILT UP ]    |         [ FORWARD ]            |     signal meter      |
-|                     |                                |                       |
-| [PAN L][CTR][PAN R] |   [ LEFT ][ STOP ][ RIGHT ]    |     composition       |  ~840 px
-|                     |                                |      report card      |
-|      [ TILT DN ]    |         [  BACK  ]             |                       |
-|                     |                                |      session log      |
+|      .-----.        |           .-----.              |     signal meter      |
+|     /   o   \       |          /  :o:  \             |                       |
+|     \       /       |          \  : :  /             |     composition       |  ~840 px
+|      '-----'        |           '-----'              |      report card      |
+|    [ CENTRE ]       |   [ STOP ]     [ SPEED ]       |                       |
+|   PAN +0  TILT +0   |   [ARC L][FWD][BACK][ARC R]    |      session log      |
 |   507 px / 0.62     |        818 px / 1.00           |    507 px / 0.62      |
 +---------------------+--------------------------------+-----------------------+
 ```
@@ -90,52 +86,78 @@ Widths are `size_flags_stretch_ratio` on three panels in one `HBoxContainer`, so
 holds at any resolution. Drive gets the centre and the largest share; the two hands rest
 naturally on the outer panels.
 
-**The mast panel is not a placeholder — it is the real control set, disabled.** Every button
-step 3.4 needs is already present, named, and sized, so adding the behaviour is wiring up
-existing controls rather than a redesign.
+**Both sticks are game-style: a fixed base and a knob that springs back to centre.**
+Output is x right / y up, -1..1, with a dead zone so a resting thumb commands nothing, and
+the disc is stretched onto the square so a corner gives full throttle *and* full lock.
 
-**The analysis panel is different: it is a display, not controls**, so there are no touch
-targets to pre-size — only the region to reserve. It held the arm controls until proposal
+- **Drive stick** — up/down is throttle (proportional, then shaped by the speed mode in
+  `rover_link.gd`), left/right is steering. Dashed guides mark ±0.5, where the rover's
+  three-position steering snaps to full lock. Lifting off, or the dead zone, is a release
+  (one zero-throttle frame), never a held zero.
+- **Camera stick** — deflection is a *rate*: the head turns at up to 40 °/s scaled by how
+  far the stick is pushed, and holds where it is let go. A small push is a fine aim.
+- The keyboard still works and sums with the sticks; a held key is mirrored on the knob in
+  green, so it gets the same on-screen confirmation a thumb does.
+
+**The analysis panel is mostly a display**: its one control is the ANALYSE button, sized
+like the others (100 px tall) and covered by the startup touch audit. It held the arm controls until proposal
 Revision 2 removed the manipulator (step S.9); the region survived the mission change intact,
 which is the payoff for reserving space by *area* rather than by widget.
 
 | Region | Contents | Arrives at |
 |---|---|---|
-| Drive | forward / back / left / right / stop | **live** |
-| Mast | pan left / right, tilt up / down, centre | step 3.4 |
-| Analysis | RFID signal meter, composition report card, session log | **live** (S.11) |
+| Drive | drive stick (throttle + steer), stop, speed, nudges | **live** |
+| Camera pan/tilt | pan/tilt stick (rate), centre | **live** (fw 0.2.0) |
+| Analysis | detection readout, ANALYSE, composition report card, session log | **live** (camera, 2026-09-26; analyse step 2026-10-08) |
 
 ### The analysis panel
 
-Three stacked blocks, top to bottom, matching the order the operator needs them in
-Scenes 5 → 8:
+Fed by the host-side camera detector ([vision/detect_stream.py](../vision/detect_stream.py))
+through [detection_api.gd](../console/scripts/detection_api.gd), never by the rover. Four
+stacked blocks, top to bottom, matching the order the operator needs them in Scenes 5 → 8:
 
-1. **Signal meter** — status line, a bar, and the figure in dBm. Scaled −90 to −40 dBm,
-   fixed rather than derived from the rover, because a bar that rescaled itself would
-   destroy the "getting warmer" cue it exists to provide. The fill is **coloured** as well
-   as sized: the operator is watching the camera monitor, not this panel, and green in
-   peripheral vision means "stop and read".
-2. **Report card** — sample name, mineral class, tag ID, then elements by mass fraction,
-   largest first.
-3. **Session log** — most recent first, five rows shown, with a running count.
+1. **Detection readout**: a status line, a bar and a percentage, from the `POST /view`
+   snapshots the detector sends about 4 times a second. The bar shows detection confidence,
+   or analysis progress while an analysis runs. The fill is **coloured** as well as sized,
+   because the operator is watching the camera monitor rather than this panel, and green in
+   peripheral vision means "stop, there is something to analyse".
+2. **ANALYSE**: enabled once the same object has held for 3 snapshots.
+3. **Report card**: the sample name, its mineral class, then its elements by mass fraction,
+   largest first, from `compositions.json` keyed by the detector label. It is filled only
+   when an analysis completes.
+4. **Session log**: most recent first, five rows shown, one row per analysed sample.
 
-Four states worth knowing, all reachable against the simulator:
+**Detect → analyse → reveal (2026-10-08).** The detector only knows what an object *looks*
+like, so **no detector label and no manifest element ever reaches the screen**. The video
+overlay says `OBJECT`, and the console says `OBJECT DETECTED`. The sample is named only
+after the operator presses ANALYSE and holds the object in view for 3 s, which simulates
+instrument integration time. That is the order a real rover works in, and it gives Scene 6
+a deliberate operator action.
 
 | State | Shows |
 |---|---|
-| Nothing in range | `NO TAG IN RANGE`, empty grey bar |
-| Reads arriving, not yet confirmed | `SIGNAL acquiring …`, amber bar climbing |
-| Confirmed | `TAG DETECTED …`, green bar, report card, log entry |
-| Reads stopped after a confirmation | `SIGNAL LOST · last result held` — the meter falls to zero but the science stays on screen |
+| Detector not running | `DETECTOR OFFLINE`, grey; DETECTOR chip amber |
+| Looking, nothing there | `NO OBJECT IN VIEW`, empty grey bar |
+| Object seen, not yet stable | `OBJECT DETECTED · acquiring`, amber bar, ANALYSE disabled |
+| Same label for 3 snapshots | `OBJECT DETECTED · ready to analyse`, green bar, ANALYSE enabled |
+| ANALYSE pressed | `ANALYSING OBJECT · hold position`, amber bar fills over 3 s, card says "analysis in progress" |
+| Object lost for > 0.75 s mid-analysis | `ANALYSIS INTERRUPTED · object left view` for 3 s; no result, nothing logged |
+| Analysis complete | report card filled, log entry; `ANALYSED · <sample>` while it stays in view |
+| Object gone after an analysis | `OUT OF VIEW · last result held`: the bar falls but the result stays |
+| Label not in the table | analysed as "Unclassified sample" in amber; the label goes to the console's output, not the screen |
 
-That last one is deliberate. Clearing the readout the instant the rover rolls away would
-throw away Scene 7 just as the operator starts reading it; but leaving the *meter* up would
-claim a signal that is gone. The two are separated on purpose.
+A running analysis follows its own object. A second, more confident rock drifting into frame
+does not interrupt it, and `POST /detection` is accepted but ignored, because the log
+records analyses rather than sightings.
 
-The readiness row reports `caps` from the handshake honestly and separately: a rover that
-*has* an RFID reader shows RFID READY even while the console's analysis panel is still a
-placeholder. Hardware presence and console support are different facts and are displayed as
-such.
+Holding the result is deliberate. Clearing the readout the instant the rover rolls away
+would throw away Scene 7 just as the operator starts reading it; but leaving the *bar* up
+would claim a rock that is gone. The two are separated on purpose.
+
+The readiness row reports DRIVE and PAN/TILT from the handshake's `caps`, and DETECTOR from
+the detector's own heartbeat — it runs on this PC, not on the rover, so no `caps` token could
+describe it. DETECTOR is amber rather than red when offline: the rover is fine, the detector
+is usually just not started, but nothing gets identified without it.
 
 ## 4. Palette
 
@@ -167,9 +189,11 @@ reads:
 
 ## 5. Multi-touch
 
-Each control is an independent `Button` and nothing takes a global input grab, so touches
-route by index to whatever is under them — one finger on drive and another on mast do not
-contend by construction.
+Each stick tracks its own finger by touch index from `_input` rather than relying on the
+GUI's single mouse focus, so one thumb on the drive stick and the other on the camera stick
+do not contend, and a second finger landing on a stick already held is ignored. With
+`emulate_touch_from_mouse` on, the mouse is touch index 0, so the bench and the panel take
+the same path.
 
 **This has not been confirmed on real hardware, because there is no touchscreen yet.** It
 is confirmed at step 3.5, on the actual panel, along with the DPI retune. What *is* handled:
@@ -178,7 +202,9 @@ is confirmed at step 3.5, on the actual panel, along with the DPI retune. What *
 - Losing window focus mid-press releases the held command. Without that, alt-tabbing while
   driving would leave the 150 ms repeat running against a rover nobody is watching.
 - A control that becomes disabled while held is released explicitly, because a disabled
-  `Button` never emits `button_up`.
+  `Button` never emits `button_up` — and a stick disabled under the finger emits `released`
+  itself. STOP (button or SPACE) also releases the drive stick, so a thumb still on it cannot
+  re-arm the rover.
 
 ## 6. Regenerating the screenshots
 

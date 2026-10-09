@@ -25,3 +25,5 @@ __pycache__/
 *.py[cod]
 plan/*
 vision/dataset/*
+vision/model/*
+vision/detections/*

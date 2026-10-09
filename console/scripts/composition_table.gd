@@ -1,10 +1,10 @@
 extends RefCounted
-## Tag ID -> simulated elemental composition (proposal §5.4).
+## Detector class label -> simulated elemental composition (proposal §5.4).
 ##
-## The rover reports a tag ID and nothing else. Turning that into a composition happens
-## here, on the console, so the mapping can be edited per arena setup without reflashing
-## anything — which matters because the tags are sealed inside rocks and the arena gets
-## re-dressed between sessions.
+## The camera detector (vision/detect_stream.py) reports a class label and nothing else.
+## Turning that into a composition happens here, on the console, so the mapping can be
+## edited per arena setup without retraining or reflashing anything. Keyed by label since
+## 2026-09-26 (format 2); the RFID tag IDs it was keyed by before are gone with the reader.
 ##
 ## Lookup order, first hit wins:
 ##   1. $COMPOSITION_TABLE   — an explicit path, for a bench run or a test
@@ -22,7 +22,7 @@ var source_path := ""
 var entry_count := 0
 var load_error := ""
 
-var _tags: Dictionary = {}
+var _labels: Dictionary = {}
 
 
 func load_default() -> bool:
@@ -37,7 +37,7 @@ func load_default() -> bool:
 
 
 func load_from(path: String) -> bool:
-	_tags = {}
+	_labels = {}
 	entry_count = 0
 	source_path = path
 	load_error = ""
@@ -51,37 +51,44 @@ func load_from(path: String) -> bool:
 	var parsed: Variant = JSON.parse_string(file.get_as_text())
 	file.close()
 
-	if not (parsed is Dictionary) or not (parsed as Dictionary).has("tags"):
-		load_error = "%s is not a composition table (no `tags` object)" % path
+	if not (parsed is Dictionary) or not (parsed as Dictionary).has("labels"):
+		# Said specifically for a format 1 file, which an old user:// copy may still be.
+		var hint := " — a format 1 (RFID tag) table, re-key it by detector label" \
+				if parsed is Dictionary and (parsed as Dictionary).has("tags") else ""
+		load_error = "%s is not a composition table (no `labels` object)%s" % [path, hint]
 		push_warning("Composition table: %s" % load_error)
 		return false
 
-	var tags: Variant = (parsed as Dictionary)["tags"]
-	if not (tags is Dictionary):
-		load_error = "`tags` is not an object in %s" % path
+	var labels: Variant = (parsed as Dictionary)["labels"]
+	if not (labels is Dictionary):
+		load_error = "`labels` is not an object in %s" % path
 		push_warning("Composition table: %s" % load_error)
 		return false
 
-	for key in (tags as Dictionary):
-		var value: Variant = (tags as Dictionary)[key]
+	for key in (labels as Dictionary):
+		var value: Variant = (labels as Dictionary)[key]
 		if value is Dictionary:
-			# Uppercased on the way in so a lower-case entry in a hand-edited file still
-			# matches what the reader reports.
-			_tags[str(key).to_upper()] = value
+			# Lower-cased on the way in so a hand-edited "Green-Sharp" still matches.
+			_labels[_key(str(key))] = value
 
-	entry_count = _tags.size()
+	entry_count = _labels.size()
 	print("Composition table: %d entries from %s" % [entry_count, path])
 	return true
 
 
-## Returns null when the tag is not in the table. That is a real operating case — a rock
-## whose ID was never entered — and the console reports it rather than inventing a result.
-func lookup(tag_id: String) -> Variant:
-	return _tags.get(tag_id.to_upper())
+## Returns null when the label is not in the table. That is a real operating case — a
+## class trained after the table was last edited — and the console reports it rather
+## than inventing a result.
+func lookup(label: String) -> Variant:
+	return _labels.get(_key(label))
 
 
-func has(tag_id: String) -> bool:
-	return _tags.has(tag_id.to_upper())
+func has(label: String) -> bool:
+	return _labels.has(_key(label))
+
+
+static func _key(label: String) -> String:
+	return label.strip_edges().to_lower()
 
 
 ## Elements as an array of {symbol, percent}, heaviest fraction first, so the report card

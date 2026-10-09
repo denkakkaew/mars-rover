@@ -32,11 +32,34 @@ ONLY CONFIDENT ROCKS COUNT. A detection whose best cell is under --min-confidenc
 default) is neither drawn nor reported. --threshold still decides which cells join a blob;
 --min-confidence decides whether the blob as a whole is believed.
 
+THE OVERLAY SAYS "OBJECT", NOT WHAT IT IS. The window labels every detection OBJECT and
+never shows the class label or the manifest's element: the model knows what a rock looks
+like, not what it is made of. Naming the sample is the console's job, and it does it only
+after the operator presses ANALYSE (detect -> analyse -> reveal). The class names and
+their manifest elements are still printed to the terminal at startup, for whoever is
+checking the model.
+
 THE CONSOLE IS TOLD. Every confident detection is POSTed to the operator console's
-detection API (console/scripts/detection_api.gd, default http://127.0.0.1:8765), which
-adds the element to its session log unless that name is already there. The posts go from
-a background thread and each element is re-sent at most every --report-every seconds, so
-a console that is closed or slow costs the video nothing.
+detection API (console/scripts/detection_api.gd, default http://127.0.0.1:8765). The
+console accepts it and adds nothing: its session log records what the operator analysed,
+not what the detector saw. The posts go from a background thread and each element is
+re-sent at most every --report-every seconds, so a console that is closed or slow costs
+the video nothing.
+
+THE CONSOLE ALSO SEES WHAT IS IN VIEW. A snapshot of the current frame's confident
+detections -- possibly none -- is POSTed to /view about --view-rate times a second. That
+drives the analysis panel's live "object detected" readout, decides when ANALYSE can be
+pressed and whether an analysis is still on target, and doubles as a heartbeat: the
+console marks the detector offline when the snapshots stop. Only the newest snapshot is
+ever queued, so a slow console sees the present rather than a backlog.
+
+THE SENSOR IMAGE IS MIRRORED, AND ONLY THE WINDOW IS UN-MIRRORED. The XIAO's OV sensor
+delivers a left-right mirror image, and vision/capture.py recorded the training set from
+that same stream -- so the model was trained on mirrored pictures. The detector therefore
+still sees the raw frame, exactly as in training, and only the displayed (and saved) frame
+is flipped, with each detection's x mirrored to match. Fixing it on the board instead
+(/control?var=hmirror) would un-mirror the model's input too, which means re-shooting the
+dataset. --raw-view shows the sensor's own orientation.
 
 Keys in the window: q or Esc quits, s saves the current frame with its overlay, space
 pauses.
@@ -310,15 +333,53 @@ class ConsoleReporter:
     also covers a console that was started after the detector.
     """
 
-    def __init__(self, base_url: str, every: float = 2.0, timeout: float = 0.5):
-        self.url = base_url.rstrip("/") + "/detection"
+    def __init__(self, base_url: str, every: float = 2.0, timeout: float = 0.5,
+                 view_rate: float = 4.0):
+        self.base = base_url.rstrip("/")
+        self.url = self.base + "/detection"
         self.every = every
         self.timeout = timeout
         self.last_sent: dict[str, float] = {}
         self.q: queue.Queue = queue.Queue(maxsize=16)
         self.warned = False
+        self.view_every = 1.0 / view_rate if view_rate > 0 else None
+        self.last_view = -1e9
+        self.view_q: queue.Queue = queue.Queue(maxsize=1)
         threading.Thread(target=self._run, daemon=True).start()
+        if self.view_every:
+            threading.Thread(target=self._run_view, daemon=True).start()
         print("console: reporting to %s" % self.url)
+
+    def view(self, detections: list[dict]) -> None:
+        """The current frame's confident detections, [] included, rate-limited."""
+        if not self.view_every:
+            return
+        now = time.monotonic()
+        if now - self.last_view < self.view_every:
+            return
+        self.last_view = now
+        body = {"detections": detections}
+        # Newest wins: drop an unsent snapshot rather than queue behind it.
+        try:
+            self.view_q.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            self.view_q.put_nowait(body)
+        except queue.Full:
+            pass
+
+    def _run_view(self) -> None:
+        url = self.base + "/view"
+        while True:
+            body = self.view_q.get()
+            req = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                    r.read()
+            except Exception:  # noqa: BLE001 - _run already says when the console is gone
+                pass
 
     def report(self, element: str, label: str, confidence: float) -> None:
         now = time.monotonic()
@@ -396,16 +457,26 @@ def find_model(explicit: str | None) -> Path:
 # --------------------------------------------------------------------------- drawing
 
 
-def draw(frame, dets, labels, elements, fps, infer_ms, threshold):
+def mirror_dets(dets: list[dict], width: int) -> list[dict]:
+    """Detections in raw-frame pixels -> the same detections in a left-right flipped frame."""
+    out = []
     for d in dets:
-        name = labels[d["class"] - 1] if 0 < d["class"] <= len(labels) else "?"
-        element = elements.get(name, "")
+        out.append({**d,
+                    "cx": width - 1 - d["cx"],
+                    "x0": width - d["x1"],
+                    "x1": width - d["x0"]})
+    return out
+
+
+def draw(frame, dets, fps, infer_ms, threshold):
+    # Generic on purpose: the detector knows what an object looks like, not what it is
+    # made of. Naming the sample is the console's job, after the operator analyses it.
+    for d in dets:
         colour = (0, 255, 0)
 
         cv2.rectangle(frame, (d["x0"], d["y0"]), (d["x1"], d["y1"]), colour, 2)
         cv2.drawMarker(frame, (d["cx"], d["cy"]), colour, cv2.MARKER_CROSS, 22, 2)
-        caption = "%s %.0f%%" % (element.upper() if element else name.upper(),
-                                 d["value"] * 100)
+        caption = "OBJECT %.0f%%" % (d["value"] * 100)
         y = max(d["y0"] - 8, 18)
         cv2.putText(frame, caption, (d["x0"], y), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                     (0, 0, 0), 4, cv2.LINE_AA)
@@ -413,12 +484,10 @@ def draw(frame, dets, labels, elements, fps, infer_ms, threshold):
                     colour, 2, cv2.LINE_AA)
 
     if dets:
-        names = sorted({labels[d["class"] - 1] for d in dets
-                        if 0 < d["class"] <= len(labels)})
-        banner = ", ".join((elements.get(n) or n).upper() for n in names) + " DETECTED"
+        banner = "OBJECT DETECTED" if len(dets) == 1 else "%d OBJECTS DETECTED" % len(dets)
         colour = (0, 255, 0)
     else:
-        banner = "no rock in view"
+        banner = "no object in view"
         colour = (170, 170, 170)
     cv2.putText(frame, banner, (12, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
                 (0, 0, 0), 5, cv2.LINE_AA)
@@ -458,6 +527,12 @@ def main(argv=None) -> int:
                    help="detect and display only; tell the console nothing")
     p.add_argument("--report-every", type=float, default=2.0,
                    help="seconds before the same element is re-sent (default 2)")
+    p.add_argument("--view-rate", type=float, default=4.0,
+                   help="what-is-in-view snapshots sent to the console per second; "
+                        "0 turns them off (default 4)")
+    p.add_argument("--raw-view", action="store_true",
+                   help="show the sensor's mirrored image as-is (default: flip the "
+                        "window so left is left; detection is unaffected either way)")
     p.add_argument("--bench", type=int, metavar="N",
                    help="time N frames with no window, print the numbers, exit")
     args = p.parse_args(argv)
@@ -476,7 +551,7 @@ def main(argv=None) -> int:
     source = FolderSource(Path(args.source)) if args.source \
         else StreamSource(args.url, args.stream_port)
     reporter = None if args.no_console or args.bench \
-        else ConsoleReporter(args.console, args.report_every)
+        else ConsoleReporter(args.console, args.report_every, view_rate=args.view_rate)
 
     recent = deque(maxlen=30)
     infer_recent = deque(maxlen=30)
@@ -509,10 +584,15 @@ def main(argv=None) -> int:
                     for b in blobs if b["value"] >= args.min_confidence]
 
             if reporter is not None:
+                in_view = []
                 for d in dets:
                     if 0 < d["class"] <= len(model.labels):
                         name = model.labels[d["class"] - 1]
-                        reporter.report(elements.get(name) or name, name, d["value"])
+                        element = elements.get(name) or name
+                        reporter.report(element, name, d["value"])
+                        in_view.append({"label": name, "element": element,
+                                        "confidence": round(float(d["value"]), 3)})
+                reporter.view(in_view)
 
             recent.append(time.perf_counter())
             fps = (len(recent) - 1) / (recent[-1] - recent[0]) if len(recent) > 1 else 0.0
@@ -528,8 +608,11 @@ def main(argv=None) -> int:
                     return 0
                 continue
 
-            draw(frame, dets, model.labels, elements, fps,
-                 float(np.mean(infer_recent)), args.min_confidence)
+            # Flip for the operator only, after inference -- see the module docstring.
+            if not args.raw_view:
+                frame = cv2.flip(frame, 1)
+                dets = mirror_dets(dets, frame.shape[1])
+            draw(frame, dets, fps, float(np.mean(infer_recent)), args.min_confidence)
             cv2.imshow(WINDOW, frame)
 
             key = cv2.waitKey(1) & 0xFF
