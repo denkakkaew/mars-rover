@@ -16,6 +16,7 @@ Desktop.ini
 $RECYCLE.BIN/
 
 # Editor / IDE
+.claude/settings.local.json
 .vscode/
 .idea/
 *.swp
@@ -25,3 +26,5 @@ __pycache__/
 *.py[cod]
 plan/*
 vision/dataset/*
+vision/model/*
+vision/detections/*

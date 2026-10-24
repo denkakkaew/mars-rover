@@ -1139,6 +1139,14 @@ restarts.** ⛔ Stop for approval.
 
 ## ✅ 2.0 DECIDED, 2026-09-14 — candidate C, on a second ESP32-CAM
 
+> ✅ **Amended 2026-09-26 — review closed by the user** ("I will use the camera, no RFID
+> tag"). The four drifts recorded at 2.0e are accepted, and they override the text below
+> wherever the two disagree: the board is a **XIAO ESP32S3 Sense**, not an ESP32-CAM; it
+> **was procured**; recognition is a **trained FOMO model**, not colour-and-size thresholds
+> (so 2.6's runtime-settable thresholds are gone); and **detection runs on the operator PC**,
+> so the rover sends no `tag` frame. RFID is not coming back. The body of this block is left
+> as it was decided, because the reasoning is the record.
+
 **The method is colour-and-size recognition on a dedicated camera board.** An **ESP32-CAM**, which is already on the desk, mounts at the front where the RFID antenna was going
 to go and looks for finished rocks by hue and apparent size. The mast camera stays. Detection
 runs **on the camera board**; the colour code → element mapping stays **console-side**, in the
@@ -1462,9 +1470,13 @@ other three for one review:
 detections across the lighting extremes, switch to ArUco — is a measurement against the **real
 rocks in the real arena**, and this was neither. It stands untouched.
 
-**Review gate:** the loop is demonstrated end to end and the numbers above are honest, but the
-four amendments are unapplied by design. ⛔ Stop for approval on the amendments, and on whether
-the console absorbs the detector (TRAINING.md §6.6) or it stays a separate window.
+**Review gate:** the loop is demonstrated end to end and the numbers above are honest.
+✅ **Closed 2026-09-26: the user accepted all four amendments** and confirmed the camera as the
+identification method, with no RFID. The console's analysis panel was retargeted onto the
+detector the same day (branch `ui-improve`): a live "rock in view" readout from `POST /view`,
+a composition card keyed by detector label in `compositions.json` format 2, and a DETECTOR
+chip in place of RFID on the readiness row. The detector still runs as its own window;
+whether the console absorbs the video (TRAINING.md §6.6) remains open.
 
 ---
 

@@ -8,8 +8,16 @@ extends Node
 ##     POST /detection
 ##     {"element": "Helium", "label": "green-sharp", "confidence": 0.83}
 ##
-## It answers 200 with {"added": true|false} — false meaning the name was already on the
-## display list — 400 on a body it cannot use, and 404 on anything else. It binds to
+## It answers 200 with {"added": true|false}, 400 on a body it cannot use, and 404 on
+## anything else. Since the analysis panel went detect → analyse → reveal, the panel
+## ignores it and `added` is always false: the session log records what the operator
+## analysed, not what the detector saw. Kept so the detector's side needs no change.
+##
+##     POST /view
+##     {"detections": [{"label": "green-sharp", "element": "Helium", "confidence": 0.83}]}
+##
+## What is in frame right now, possibly nothing, sent a few times a second. It drives the
+## analysis panel's live readout and is the detector's heartbeat. Answers {"ok": true}. It binds to
 ## loopback unless DETECTION_API_BIND says otherwise, because nothing off this machine has
 ## any business announcing rocks to the operator. It never touches the rover link: video
 ## and detection stay off the control channel (proposal §5.5, risk R1).
@@ -25,6 +33,10 @@ const MAX_REQUEST_BYTES := 16384
 ## func(element: String, label: String, confidence: float) -> bool, true when the entry
 ## was new. Set by the console; the API itself holds no opinion on what is a duplicate.
 var handler: Callable
+
+## func(detections: Array) -> void, each entry {label, element, confidence} with the
+## strings stripped and confidence a float. Set by the console.
+var view_handler: Callable
 
 var _server := TCPServer.new()
 ## Each entry: {peer: StreamPeerTCP, buf: PackedByteArray, started: int}
@@ -105,12 +117,13 @@ func _service(client: Dictionary) -> bool:
 
 	var method := request_line[0] if request_line.size() > 0 else ""
 	var path := request_line[1] if request_line.size() > 1 else ""
-	if method != "POST" or path.split("?")[0] != "/detection":
-		_respond(peer, 404, {"error": "only POST /detection is served"})
+	var route := path.split("?")[0]
+	if method != "POST" or not (route in ["/detection", "/view"]):
+		_respond(peer, 404, {"error": "only POST /detection and POST /view are served"})
 		return true
 
 	var body := buf.slice(body_start, body_start + content_length).get_string_from_utf8()
-	var result := _handle(body)
+	var result := _handle(body) if route == "/detection" else _handle_view(body)
 	_respond(peer, int(result[0]), result[1])
 	return true
 
@@ -136,6 +149,32 @@ func _handle(body: String) -> Array:
 	if handler.is_valid():
 		added = bool(handler.call(element, label, confidence))
 	return [200, {"added": added, "element": element}]
+
+
+## Returns [status, reply].
+func _handle_view(body: String) -> Array:
+	var json := JSON.new()
+	var data: Variant = json.data if json.parse(body) == OK else null
+	if not (data is Dictionary) or not ((data as Dictionary).get("detections") is Array):
+		return [400, {"error": "body must be {\"detections\": [...]}"}]
+
+	var detections: Array = []
+	for raw: Variant in (data as Dictionary)["detections"]:
+		if not (raw is Dictionary):
+			continue
+		var entry := raw as Dictionary
+		var label := str(entry.get("label", "")).strip_edges()
+		var element := str(entry.get("element", "")).strip_edges()
+		if label == "" and element == "":
+			continue
+		detections.append({
+			"label": label,
+			"element": element if element != "" else label,
+			"confidence": clampf(float(entry.get("confidence", 0.0)), 0.0, 1.0),
+		})
+	if view_handler.is_valid():
+		view_handler.call(detections)
+	return [200, {"ok": true}]
 
 
 func _respond(peer: StreamPeerTCP, status: int, reply: Dictionary) -> void:

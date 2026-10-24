@@ -47,11 +47,13 @@ with the colour code → element lookup **console-side** in `compositions.json`.
 changed on 2026-09-26 at step 2.0e: detection now runs on the operator PC** (~1 ms per frame
 against 2713 ms on the board), so the rover sends no `tag` frame. The console-side lookup is
 unchanged and is now more, not less, consistent with where the work happens. The on-board
-detector is built and parked. Fiducial markers
+detector is built and parked. **The user closed 2.0's amendment review on 2026-09-26: camera,
+no RFID** — all four drifts are accepted (IMPLEMENTATION_PLAN.md, the banner under 2.0's
+decision block). Fiducial markers
 (ArUco) are the recorded fallback, on an explicit trigger: **step 2.3 failing to reach ≥ 95%
 correct class over 100 detections.** Steps 2.1–2.7 are replaced one-for-one; the RFID versions
-are retained in the plan as history. **No protocol change** — the `tag` frame carries a colour
-code where it carried an EPC. The reasoning is at step 2.0 in
+are retained in the plan as history. **No protocol change** — the `tag` frame stays in the
+contract, but nothing sends it and the console no longer displays it. The reasoning is at step 2.0 in
 [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) and the power consequences at §6.1–§6.2 of
 [docs/power-budget.md](docs/power-budget.md).
 
@@ -192,11 +194,9 @@ numbers from the 2026-09-26 run in it. [vision/autolabel.py](vision/autolabel.py
 nobody draws boxes: it contrasts each rock session against the empty-floor session and writes
 the boxes itself.
 
-⚠ **This departs from step 2.0's recorded design**, which has detection running on the
-detection board and the rover reporting a colour code in a `tag` frame. With host-side
-inference the rover reports nothing. That goes in 2.0's amendment review alongside the
-ESP32-CAM/XIAO and colour-thresholds/CNN drifts — all four are held together, deliberately
-unapplied.
+This departed from step 2.0's original design (detection on the board, a colour code in a
+`tag` frame). **Accepted 2026-09-26** with the other three drifts — the XIAO for the
+ESP32-CAM, a bought board, a CNN for colour thresholds — when the user closed the review.
 
 **Known defect F7**: `main.cpp`'s Wi-Fi join is an unbounded `while` loop — a wrong password or
 an absent AP hangs the board in `setup()` forever, so the WebSocket server never starts and the
@@ -311,9 +311,9 @@ decision:
 - **Control channel** — Godot touchscreen console → ESP32 over Wi-Fi (WebSocket), with
   Bluetooth as fallback. ESP32 drives **two drive motors and one steering motor** (steered
   chassis, chosen at step 0.2 — *not* skid steer; it cannot pivot in place) and **two**
-  camera pan/tilt servos (D56MG; the mast no longer moves since 2026-09-19), and publishes telemetry and tag reads back. **Since 2.0
-  (2026-09-14) the identification sensor is a second ESP32-CAM, not a UART reader** — it does
-  its own detection and reports a colour code, so the control ESP32 relays rather than polls.
+  camera pan/tilt servos (D56MG; the mast no longer moves since 2026-09-19), and publishes telemetry back. **Since 2.0 the identification sensor is a
+  second camera (a XIAO ESP32S3 Sense), not an RFID reader**, and since 2.0e its video is
+  analysed on the operator PC — so identification never touches the control ESP32 at all.
 
   **Two driver chips, split by function** (2026-08-30). The **drive** motors are on an
   **L293D**, one motor per channel — front on output A, rear on output B — which is what
@@ -335,10 +335,10 @@ Video never shares the control channel, so streaming load cannot make driving la
 proposed change that merges them contradicts the design rationale in proposal §5.5 and risk R1.
 
 **There is no robotic arm.** The front mounting point carries the **detection camera** — a
-second ESP32-CAM, chosen at 2.0 — where Revision 2 had put an RFID antenna. Reads
-travel detector → ESP32 → console alongside telemetry; the **console**, not the rover, turns an
-ID into a displayed composition, so the lookup table can be edited without reflashing. That
-principle is unchanged by 2.0 — only the ID's origin is.
+XIAO ESP32S3 Sense — where Revision 2 had put an RFID antenna. Its video goes to
+`vision/detect_stream.py` on the operator PC, which tells the console what it sees over
+`detection_api.gd`; the **console**, not the rover, turns a class label into a displayed
+composition, so the lookup table can be edited without reflashing or retraining.
 
 **One camera was a single point of vision** (risk R8) — if the mast head failed, the rover was
 blind. That made mast pan/tilt reliability higher priority than in Revision 1, and the head
@@ -405,7 +405,7 @@ Safety behaviours that are deliberate and must survive refactors:
 - **Nothing arms without a `hello` handshake on the current connection**, so an unidentified
   console gets no actuation at all.
 - Re-arming requires a fresh command, so a reconnect can never resume the last throttle.
-- The console's drive buttons are hold-to-drive, and `rover_link.gd` **repeats the held
+- The console's drive stick is hold-to-drive (lift off = release), and `rover_link.gd` **repeats the held
   command every 150 ms** — without that the failsafe cuts the motors mid-press. The repeat
   interval is chosen against `COMMAND_TIMEOUT_MS`; changing one means rechecking the other.
 - The drive pad is disabled unless the link is live and telemetry fresh, so a dead console
@@ -467,24 +467,36 @@ file, otherwise it lands in the Godot user data folder and the path is printed a
 - Env vars drive the console for development, none of which change committed defaults:
   `ROVER_URL` (point at the simulator), `RTT_LOG` (latency CSV path), `CONSOLE_SHOT` /
   `CONSOLE_SHOT_DELAY` (capture a PNG after N seconds and exit), `COMPOSITION_TABLE`
-  (alternative tag→composition file), `DETECTION_API_PORT` / `DETECTION_API_BIND` (where
+  (alternative label→composition file), `DETECTION_API_PORT` / `DETECTION_API_BIND` (where
   the detector's API listens; default `127.0.0.1:8765`).
 - [console/scripts/detection_api.gd](console/scripts/detection_api.gd) is the console's
-  one inbound API: `POST /detection {"element","label","confidence"}` from
-  [vision/detect_stream.py](vision/detect_stream.py), which only reports detections at or
-  above `--min-confidence` (0.70). The analysis panel inserts an element into the session
-  log **once per name** (case-insensitive) and answers `{"added": false}` for a duplicate.
-  It never touches the rover link — detection stays off the control channel.
-- **[console/data/compositions.json](console/data/compositions.json) maps tag ID → simulated
-  elemental composition**, and is console-side on purpose: the rover only ever reports a tag
-  ID, so an arena can be re-dressed and re-tagged without reflashing anything. Lookup order is
+  one inbound API, fed by [vision/detect_stream.py](vision/detect_stream.py), which only
+  reports detections at or above `--min-confidence` (0.70). Two verbs:
+  `POST /detection {"element","label","confidence"}` is **accepted and ignored**
+  (`{"added": false}` always — the log records analyses, not sightings), and
+  `POST /view {"detections":[...]}` is what is in frame right now, sent ~4×/s even when
+  empty — it drives the live readout and is the detector's heartbeat (the DETECTOR chip
+  goes amber 2 s after it stops). It never touches the rover link — detection stays off
+  the control channel.
+- **[console/data/compositions.json](console/data/compositions.json) maps detector class
+  label → simulated elemental composition** (format 2, keyed under `labels`; format 1 was
+  keyed by RFID EPC and is refused with a hint). Console-side on purpose, so an arena can be
+  re-dressed without retraining or reflashing anything. A label with no entry is analysed
+  as "Unclassified sample", flagged amber, with the label printed to stdout. Lookup order is
   `$COMPOSITION_TABLE` → `user://compositions.json` → the shipped `res://` copy. The
   percentages in it are **presets, not measurements** — the console has no spectrometer, and
   the file says so at the top. Keep it that way.
-- A tag read is not a detection. [analysis_panel.gd](console/scripts/analysis_panel.gd)
-  requires **three reads of the same tag within 1.5 s** before it will declare TAG DETECTED,
-  because Scene 6 asks for "a stable read … not an intermittent or dropped signal" and the
-  simulator produces exactly that ragged stream at the edge of range.
+- **Detect → analyse → reveal (2026-10-08). No detector label and no manifest element is
+  ever shown** — the video overlay says `OBJECT`, the console `OBJECT DETECTED` — because
+  the model knows what a rock looks like, not what it is made of.
+  [analysis_panel.gd](console/scripts/analysis_panel.gd) enables **ANALYSE** after **three
+  consecutive `/view` snapshots agree on the same label** (Scene 6's "stable read … not an
+  intermittent or dropped signal"); the operator presses it, the object must stay in view
+  for `ANALYSIS_SEC` (3 s, simulated integration time), and only then does the report card
+  name the sample and the log gain a row. Losing the object for 0.75 s mid-analysis
+  interrupts it with no result. The report is held after the rock leaves view; only the
+  live line clears.
+  The simulator's RFID model (`tag` frames, `--dead-tags`) no longer reaches the screen.
 
 ## Work sequencing
 
