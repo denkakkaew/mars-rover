@@ -54,6 +54,14 @@ const HANDSHAKE_RETRY_SEC := 1.0
 ## changes, this has to be rechecked with it.
 const DRIVE_REPEAT_SEC := 0.15
 
+## The most often a *changed* drive command goes out — 20 a second. The touch stick
+## reports every finger movement, which on 2026-11-07 put 50-60 drive frames a second on
+## the air while driving (the rover's link log: 484-609 frames per 10 s, against 39 at
+## idle) — airtime that a marginal Wi-Fi link could not spare. A change inside the window
+## is held and sent when it closes, so the latest position always arrives, at most 50 ms
+## late. Releasing the stick and `stop` are never held: stopping is not rate-limited.
+const DRIVE_MIN_INTERVAL_SEC := 0.05
+
 ## Telemetry arrives every 500 ms; three missed frames means something is wrong.
 const TELEMETRY_STALE_SEC := 1.5
 
@@ -72,10 +80,11 @@ const RTT_WINDOW := 240
 
 # --- Fine drive (step S.13, onto the steered model at S.15) --------------------------
 #
-# Everything here shapes the `fwd` number the console sends. `steer` is deliberately
-# NOT shaped: the rover thresholds it to full lock or centre anyway (docs/protocol.md
-# 3.2.1), so curving it or lifting it off a floor would be shaping a value that gets
-# rounded away. Steering demand goes on the wire as the operator meant it.
+# Everything here shapes the `fwd` number the console sends. `steer` is shaped only on a
+# `steerprop` rover (fw 0.3.0, a steering servo), where an expo curve gives fine control
+# near centre. On a `steer3` rover it goes out raw: that rover thresholds it to full lock
+# or centre anyway (docs/protocol.md 3.2.1), so curving it would shape a value that gets
+# rounded away.
 
 ## How hard the pad drives. TRANSIT crosses the arena; PRECISION is for lining up on a
 ## rock in Scenes 4-5, where a full-throttle tap overshoots.
@@ -110,11 +119,32 @@ const SPEED_SCALE := {
 ## it wrong. Step 1.5 drives on real sand and measures breakaway; that is the number.
 ## Left deliberately conservative until then: too high wastes low-speed control, too low
 ## leaves the rover stuck in its own ruts with the pad appearing to respond.
-const MIN_EFFECTIVE_THROTTLE := 0.45
+##
+## **Lowered from 0.45 to 0.10 on 2026-11-07, for the RC-car chassis** (fw 0.3.0). The
+## L293D argument above no longer applies to anything: the drive is now a brushed ESC on
+## a 370 motor, which pulls away at a small fraction of its travel. A 0.45 floor would
+## make the gentlest stick touch about a third of full power (0.45 x the 0.75 cap), which
+## is exactly the "too powerful" this change answers. 0.10 is a starting value, not a
+## measurement: find the ESC's real start point with `e <us>` in the motortest bench
+## (docs/esc-wiring.md 4 step 7) and put the matching fraction here.
+##
+## **Lowered again to 0.06 the same day, because the start point moved to the firmware.**
+## 0.10 x the 0.75 cap reached only ~1538 us, inside the ESC's own neutral band, so the
+## slowest stick did not move the car at all. config.h's ESC_FORWARD_START_US /
+## ESC_REVERSE_START_US now lift any demand past the rover's 0.05 deadband straight to
+## where the motor turns, so this floor only has to clear that deadband (0.06 on the
+## wire's 0.01 grid). **To make the slowest speed faster, change config.h, not this.**
+const MIN_EFFECTIVE_THROTTLE := 0.06
 
 ## Above the floor, response is curved rather than linear so that most of the pad's
 ## range lives at the slow end where the aiming happens.
 const THROTTLE_GAMMA := 1.8
+
+## Steering expo for a `steerprop` rover: out = e*x^3 + (1-e)*x, the standard RC curve.
+## Full deflection is still full lock, but the middle of the stick is gentler — at 0.5,
+## 20% deflection steers 10% of lock and half deflection 31% — so small heading
+## corrections are easy to hold, and lining up on a rock does not wobble. 0 is linear.
+const STEER_EXPO := 0.5
 
 ## One nudge. Long enough to clear breakaway and actually move, short enough that the
 ## result is a step rather than a drive.
@@ -165,6 +195,13 @@ var _raw_throttle := 0.0
 var _raw_steer := 0.0
 var _request_scale := 1.0
 var _nudge_remaining := 0.0
+
+## Rate limiting (DRIVE_MIN_INTERVAL_SEC): time since a drive frame last went out, the
+## values it carried, and whether a newer demand is waiting for the window to close.
+var _since_drive_sent := 1000.0
+var _sent_fwd := NAN
+var _sent_steer := NAN
+var _drive_pending := false
 
 var _ping_timer := 0.0
 var _outstanding: Dictionary = {}  ## ping timestamp -> the same value, awaiting its pong
@@ -318,7 +355,7 @@ func set_speed_mode(mode: Speed) -> void:
 	if _holding and not is_nudging():
 		_request_scale = SPEED_SCALE[speed_mode]
 		_apply_shaping()
-		_send_drive()
+		_send_drive_limited()
 
 
 func toggle_speed_mode() -> void:
@@ -335,17 +372,23 @@ func _begin_drive(throttle: float, steer: float, scale: float) -> void:
 	_raw_steer = clampf(steer, -1.0, 1.0)
 	_request_scale = scale
 	_apply_shaping()
-	_repeat_timer = DRIVE_REPEAT_SEC
-	_send_drive()
+	_send_drive_limited()
 
 
-## Throttle is scaled and curved; steering is not. Scaling `steer` by the speed mode
-## would be a lie on a three-position chassis — a PRECISION-scaled 0.35 falls below the
-## rover's 0.5 threshold and rounds to *straight ahead*, so the pad would silently stop
-## steering in the mode where careful steering matters most.
+## Throttle is scaled and curved. Steering is never scaled by the speed mode — on a
+## three-position chassis a PRECISION-scaled 0.35 falls below the rover's 0.5 threshold and
+## rounds to *straight ahead*, and on a servo it would take full lock away in exactly the
+## mode used for tight lining-up. It is curved, on a proportional rover only (STEER_EXPO).
 func _apply_shaping() -> void:
 	_hold_throttle = _shape(_raw_throttle * _request_scale)
-	_hold_steer = _raw_steer
+	_hold_steer = _shape_steer(_raw_steer)
+
+
+## Expo on a `steerprop` rover, raw otherwise. Odd-symmetric, 0 -> 0, ±1 -> ±1.
+func _shape_steer(value: float) -> float:
+	if not rover_caps.has(STEER_PROPORTIONAL):
+		return value
+	return STEER_EXPO * value * value * value + (1.0 - STEER_EXPO) * value
 
 
 ## Maps operator intent onto a throttle the rover can actually act on: curved, then
@@ -377,12 +420,37 @@ func send_mast(pan_deg: float, tilt_deg: float) -> void:
 	_send({"cmd": "mast", "pan": snappedf(pan_deg, 0.1), "tilt": snappedf(tilt_deg, 0.1)})
 
 
+## Sends the current demand now. Used directly for anything that must not wait — the
+## zero frame of a release, the end of a nudge, the repeat — and by the limiter below.
+## Every send restarts the repeat timer: a frame that just went out *is* the refresh, so
+## the 150 ms repeat only fills silence instead of adding to a stream of changes.
 func _send_drive() -> void:
-	_send({
-		"cmd": "drive",
-		"fwd": snappedf(_hold_throttle, 0.01),
-		"steer": snappedf(_hold_steer, 0.01),
-	})
+	_drive_pending = false
+	_since_drive_sent = 0.0
+	_repeat_timer = DRIVE_REPEAT_SEC
+	_sent_fwd = snappedf(_hold_throttle, 0.01)
+	_sent_steer = snappedf(_hold_steer, 0.01)
+	_send({"cmd": "drive", "fwd": _sent_fwd, "steer": _sent_steer})
+
+
+## A changed demand, rate-limited to DRIVE_MIN_INTERVAL_SEC. A demand that rounds to what
+## is already on the wire sends nothing (the repeat keeps it alive); one inside the window
+## is marked pending and goes out from _service_drive_rate when the window closes.
+func _send_drive_limited() -> void:
+	if (snappedf(_hold_throttle, 0.01) == _sent_fwd
+			and snappedf(_hold_steer, 0.01) == _sent_steer):
+		_drive_pending = false
+		return
+	if _since_drive_sent >= DRIVE_MIN_INTERVAL_SEC:
+		_send_drive()
+	else:
+		_drive_pending = true
+
+
+func _service_drive_rate(delta: float) -> void:
+	_since_drive_sent += delta
+	if _drive_pending and _holding and _since_drive_sent >= DRIVE_MIN_INTERVAL_SEC:
+		_send_drive()
 
 
 func _send(payload: Dictionary) -> void:
@@ -409,6 +477,7 @@ func _process(delta: float) -> void:
 			# Before the repeat, so the frame that ends a nudge goes out on this tick
 			# rather than one tick after the timer expired.
 			_service_nudge(delta)
+			_service_drive_rate(delta)
 			_service_drive_repeat(delta)
 			_service_ping(delta)
 
@@ -621,6 +690,10 @@ func _service_staleness(delta: float) -> void:
 func _reset_session() -> void:
 	_holding = false
 	_clear_drive_inputs()
+	_drive_pending = false
+	_since_drive_sent = 1000.0
+	_sent_fwd = NAN
+	_sent_steer = NAN
 	# A nudge in flight when the link drops must not survive the reconnect and resume
 	# against a rover that has already failed safe.
 	_cancel_nudge()

@@ -16,6 +16,14 @@ at both 460800 and 921600.
 three 130-class DC motors (**two drive, one steering**) and a 4.8 V bench pack. `config.h`
 carries **real pins**, not placeholders.
 
+**The chassis changed to an RC car on 2026-11-07 (firmware 0.3.0)**: the drive motor on a
+**TFTH 40 A brushed ESC** (GPIO23 since 2026-11-08, was GPIO32) and the car's own **steering servo** (GPIO33), both on
+50 Hz servo pulses, wired per [docs/esc-wiring.md](docs/esc-wiring.md). The L293D, the
+DRV8833 and the spring-return steering motor are gone, and **steering is now proportional**
+(`steerprop`). **GPIO27 was reported broken the same day**, joining GPIO26. Built and
+host-tested; **not yet run on the car** — the bring-up is esc-wiring.md §4. The paragraph
+below is the 0.2.x drive it replaced, kept for the GPIO26 history.
+
 **The drive wiring was reworked on 2026-08-30 and now uses both driver chips at once**: the
 two drive motors on an **L293D** (one motor per channel, direction inputs tied together in
 the loom, both enables strapped to VCC) and the steering motor on the **DRV8833** (STBY
@@ -85,6 +93,12 @@ Driving is still the primary line of work.
   signal. Rev B, 2026-09-19: **the mast no longer moves, so its servos are gone.** Wired and
   actuated (fw 0.2.0) the same day; its §6 is the free-run test, which is also where the
   travel limits and each axis's direction get confirmed
+- [docs/esc-wiring.md](docs/esc-wiring.md) — **the drive wiring since 2026-11-07**: the
+  RC-car chassis (TFTH 40 A brushed ESC on **GPIO23** since 2026-11-08, the car's steering
+  servo on GPIO33, camera pan/tilt still GPIO18/19, 220 k / 22 k battery divider). GPIO26,
+  GPIO27 and GPIO32 are all out of service. Implemented by firmware 0.3.0; its §4 is the bring-up, wheels off the
+  ground. **Never flash 0.2.x onto this board with the ESC connected**: it puts 1.5 kHz PWM
+  on GPIO32
 - [console/](console/) — Godot 4 touchscreen operator console
 - [firmware/](firmware/) — PlatformIO / Arduino-ESP32 rover firmware
 
@@ -141,10 +155,11 @@ controller and must never share a build with it.
   needs no association, **this is the instrument for 1.2's RSSI-through-glass survey** and can
   be run before the arena network exists.
 
-- `[env:motortest]` → [src/motor_test.cpp](firmware/src/motor_test.cpp): step 1.3's
-  serial-driven motor bench. Drives through `lib/Drive`, so the deadband and steering
-  threshold under test are the ones the rover will run, with no Wi-Fi and no console in the
-  path to be blamed.
+- `[env:motortest]` → [src/motor_test.cpp](firmware/src/motor_test.cpp): since fw 0.3.0,
+  the **ESC + steering bench** (docs/esc-wiring.md §4 steps 5–7). Drives through `lib/Drive`
+  and `lib/RcMap`, so the cap and endpoints under test are the rover's, with no Wi-Fi and no
+  console in the path. `e <µs>` / `t <µs>` send raw pulses, **bypassing the speed cap**, to
+  find the ESC's start point and the steering end stops. Wheels off the ground.
 - `[env:camcheck]` → [src/cam_check.cpp](firmware/src/cam_check.cpp): **ESP32-CAM**
   bring-up (step 2.0b.1) — identity, PSRAM, sensor PID and a base64 frame down the serial
   line, credential-free. **Built but never run**; that board is no longer the intended
@@ -207,7 +222,7 @@ The first build downloads the Xtensa toolchain and the pinned libraries. Copy
 credentials before flashing — the committed placeholder will not associate.
 
 **`python -m platformio test -e native` is the cheapest check on the firmware** and the one
-to run after touching `lib/Protocol`, `lib/Safety` or `lib/Aim` — it exercises the wire format and the
+to run after touching `lib/Protocol`, `lib/Safety`, `lib/Aim` or `lib/RcMap` — it exercises the wire format and the
 whole failsafe contract on the PC in about three seconds, with no ESP32 in the loop. It needs
 a host compiler on `PATH`; this machine uses MinGW-w64 GCC from MSYS2 at
 `C:\msys64\ucrt64\bin` (install packages with the full path `C:\msys64\usr\bin\pacman`, which
@@ -223,7 +238,8 @@ console can be developed and demonstrated with no hardware. Install deps once wi
 ```powershell
 python tools/fake_rover.py --view                  # ASCII arena, port 81
 python tools/fake_rover.py --latency 250 --loss 5  # start with faults injected
-python tools/fake_rover.py --caps drive,steer3,mast,rfid   # pretend Phases 2-3 are built
+python tools/fake_rover.py --caps drive,steerprop,mast,rfid   # pretend Phases 2-3 are built
+python tools/fake_rover.py --caps drive,steer3     # the old three-position axle
 python tools/fake_rover.py --caps drive            # no steering token: console must refuse
 python tools/fake_rover.py --steer-lock 15         # a turning circle that does not fit
 python tools/fake_rover.py --read-range 0.5 --flaky 20 --dead-tags E2801160600002
@@ -315,6 +331,11 @@ decision:
   second camera (a XIAO ESP32S3 Sense), not an RFID reader**, and since 2.0e its video is
   analysed on the operator PC — so identification never touches the control ESP32 at all.
 
+  **Since 2026-11-07 (fw 0.3.0) this is an RC-car chassis**: one ESC and one steering
+  servo, both on 50 Hz pulses (LEDC 0/1, timer 0). Stopping is a **held neutral pulse**,
+  not an absence of pulses, and the failsafe **actively centres** the servo, because it has
+  no return spring. The rest of this block is the 0.2.x drive it replaced.
+
   **Two driver chips, split by function** (2026-08-30). The **drive** motors are on an
   **L293D**, one motor per channel — front on output A, rear on output B — which is what
   finally answered power-budget F8: three motors no longer contend for two bridges. Their
@@ -390,6 +411,10 @@ rather than break the wire (protocol §3.4).
 {"t":"tag","id":"E2801160600002","rssi":-47,"ts":184320}   # unsolicited, per read
 ```
 
+**Since fw 0.3.0 steering is proportional (`steerprop`)** — a servo, mapped by `lib/RcMap`,
+so small heading corrections exist again, and the failsafe commands centre explicitly. The
+rest of this paragraph describes the 0.2.x three-position axle (`steer3`).
+
 **Steering is three-position** — full lock or centre, no intermediate angle, with a spring
 recentring it unpowered. `steer` stays a **float on the wire** and the firmware thresholds it
 at ±0.5; which kind of steering a build has is advertised in the handshake `caps` as `steer3`
@@ -409,7 +434,19 @@ Safety behaviours that are deliberate and must survive refactors:
   command every 150 ms** — without that the failsafe cuts the motors mid-press. The repeat
   interval is chosen against `COMMAND_TIMEOUT_MS`; changing one means rechecking the other.
 - The drive pad is disabled unless the link is live and telemetry fresh, so a dead console
-  cannot look drivable.
+  cannot look drivable. **Since 2026-11-07 STALE is a pause rather than a release**: nothing
+  is sent while it lasts, but a thumb still on the drive stick is kept, and the stick's
+  *current* position goes out as a fresh command when telemetry returns. Keys and buttons
+  are still let go, and link-down / connecting / mismatch still drop everything.
+- **The drive watchdog** (`driveWatchdogTask` in `main.cpp`, 2026-11-07) enforces
+  `COMMAND_TIMEOUT_MS` on its own FreeRTOS task, above loopTask's priority, because
+  `loop()` was measured blocking for up to 4.3 s inside a WiFiClient write — during which
+  Safety never ran and an armed rover kept its last throttle. **Every write to `g_drive`
+  goes through `driveSet()`/`driveStop()`** under its mutex; a new direct `g_drive.` call in
+  `main.cpp` bypasses the watchdog's bookkeeping.
+- Changed drive demands are rate-limited to 20/s (`DRIVE_MIN_INTERVAL_SEC` in
+  `rover_link.gd`); the touch stick otherwise put 50–60 frames/s on the air. Releases,
+  `stop` and the repeat are never held back.
 
 A degraded link must never leave the rover driving into the glass. All of the firmware side is
 covered by `test/test_safety` — change the logic and the tests should be what tells you.
@@ -440,21 +477,24 @@ file, otherwise it lands in the Godot user data folder and the path is printed a
 - `platformio.ini` pins `espressif32@^6.9.0` (arduino-esp32 2.0.x) because `Drive` uses the
   2.x LEDC API (`ledcSetup`/`ledcAttachPin`). Bumping to core 3.x requires switching to
   `ledcAttach`.
-- **LEDC channels 0 and 1 are both the drive** — with the L293D enables strapped to VCC there
-  is no enable to modulate, so the PWM moves to whichever direction input matches the command
-  and each input needs its own channel. **The steering claims no LEDC channel at all**: it is
-  three-position, so there is no speed to modulate, and step 1.3 measured that a PWM-limited
-  steering channel could not shift the axle against its return spring. Channels 2 upward are
-  free for the Phase 3 servos, which take **2 and 3** (camera pan/tilt; timer 1 at 50 Hz).
-- `Drive` runs the drive PWM at **1.5 kHz**, not the 20 kHz step 1.3 ran on the DRV8833. The
-  drive motors are back behind an L293D, and a bipolar Darlington bridge cannot switch cleanly
-  up there. The audible whine is the price of that part. The DRV8833 would take 20 kHz happily
-  but now carries only the steering, which takes no PWM at all — so nothing is left to gain by
-  raising it.
-- **GPIO26 is out of service.** It metered 0.9 V driving forward on 2026-08-30 where GPIO27
-  metered 3.3 V driving back, after a period of working: a damaged output driver. The drive
-  forward input moved to **GPIO32**, which the DRV8833's strapped STBY had just freed and which
-  — unlike GPIO12/GPIO14 — emits nothing during boot. Do not move the drive back onto GPIO26.
+- **LEDC channels 0 and 1 are the drive** (since fw 0.3.0): **0 the ESC, 1 the steering
+  servo**, sharing timer 0 at **50 Hz** / 16-bit. Channels 2 and 3 are the camera pan/tilt
+  on timer 1 at 50 Hz. [firmware/lib/RcMap/](firmware/lib/RcMap/) makes the drive's
+  decisions (deadband, speed cap `THROTTLE_LIMIT_*`, direction, steering trim). It has no
+  Arduino headers and is host-tested in `test/test_rcmap`. `lib/Drive` only writes the
+  pulses. **Direction lives in the endpoints**: if FORWARD reverses, swap `ESC_FORWARD_US` /
+  `ESC_REVERSE_US`; if LEFT steers right, swap `STEER_LEFT_US` / `STEER_RIGHT_US`.
+- **GPIO26, GPIO27 and GPIO32 are out of service.** GPIO26 metered 0.9 V driving forward on
+  2026-08-30, a damaged output driver, and the drive moved to **GPIO32**, which emits nothing
+  during boot (unlike GPIO12/GPIO14). GPIO27 was reported broken on 2026-11-07. **GPIO32
+  measured 4.8 V with the ESC unplugged on 2026-11-08** — 5 V reaching it from the board
+  wiring — and the ESC moved to **GPIO23**, on the other header row, **where it was confirmed
+  working the same day; GPIO32 is recorded as broken.** All three failures sit
+  on the same row, so suspect the board wiring there before blaming the silicon. Drive
+  nothing on any of them. `[env:gpiotest]` (src/gpio_test.cpp) is the pin-health bench.
+- `[env:esp32dev]` must exclude **every** bench sketch in `build_src_filter`. It was missing
+  `xiao_detect.cpp` until 2026-11-07, which dragged the S3-only `lib/EiRockModel` into the
+  rover build and broke it.
 - [console/scripts/rover_link.gd](console/scripts/rover_link.gd) owns all transport concerns
   (connect, reconnect, handshake, JSON framing, the drive repeat, RTT probing); UI scripts
   call its methods and read its state, and never touch the socket. It exposes `is_linked()`

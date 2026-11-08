@@ -1,0 +1,7 @@
+{
+  "name": "RcMap",
+  "version": "1.0.0",
+  "description": "Throttle/steering demand -> ESC and steering-servo pulse widths: deadband, speed cap, direction. Host-compilable: no Arduino headers. See docs/esc-wiring.md.",
+  "frameworks": "*",
+  "platforms": "*"
+}

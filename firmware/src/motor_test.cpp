@@ -1,25 +1,25 @@
-// Motor bench test — IMPLEMENTATION_PLAN.md step 1.3.
+// ESC + steering servo bench — docs/esc-wiring.md section 4, steps 5-7.
 //
 //   python -m platformio run -e motortest -t upload -t monitor
 //
-// Drives the motors from serial commands, with **no Wi-Fi, no console and no protocol**.
-// Same reasoning as bringup.cpp at step 1.1: prove the thing in front of you before
-// adding a radio link to the list of things that might be wrong. A motor that will not
-// turn is a very different investigation from a console that will not connect, and
-// running both at once makes each one look like the other.
+// Serial-driven, with **no Wi-Fi, no console and no protocol**, so a car that will not
+// move is not diagnosed through a radio link. Same reasoning as bringup.cpp.
 //
-// It drives through **lib/Drive**, not through raw digitalWrite, so what gets tested is
-// the code the rover will actually run — including the throttle deadband and the
-// three-position steering threshold. The one exception is `pins`, which bypasses Drive
-// deliberately to check wiring with a meter.
+// Two kinds of command:
 //
-// Safety, because this is the first code in the project that can move something:
+//   * **Through lib/Drive** — `f`, `b`, `l`, `r`, `c`. These go through lib/RcMap, so the
+//     deadband, the speed cap and the steering end stops under test are exactly the ones
+//     the rover will run.
+//   * **Raw pulses** — `e <us>`, `t <us>`. These bypass the maps *and the speed cap*, and
+//     exist to measure what config.h is missing: where the ESC starts to turn the motor,
+//     and where the steering linkage hits its end stops. **Wheels off the ground.**
 //
-//   * Everything starts stopped and stays stopped until told otherwise.
-//   * A running motor **stops itself after AUTO_STOP_MS** unless a fresh command
-//     arrives. Same instinct as the rover's failsafe: nothing on this bench should keep
-//     running because someone walked away from the keyboard.
-//   * `s` stops immediately and is always accepted.
+// Safety, because this sketch can spin a 75 km/h car's motor:
+//
+//   * Boots at neutral / centre, which is what the ESC arms on.
+//   * **Throttle returns to neutral after AUTO_STOP_MS** unless a fresh command arrives.
+//     Steering is left where it is — a held steering angle cannot move the car.
+//   * `s` (or an empty line) stops immediately and is always accepted.
 
 #include <Arduino.h>
 
@@ -28,195 +28,170 @@
 
 namespace {
 
-/// A motor left running while nobody is typing is how a bench test drags a rover off a
-/// desk. Every command restarts this.
-constexpr uint32_t AUTO_STOP_MS = 5000;
+constexpr uint32_t AUTO_STOP_MS = 3000;
 
-Drive g_drive({PIN_DRIVE_IN1, PIN_DRIVE_IN2, LEDC_CHANNEL_DRIVE_IN1, LEDC_CHANNEL_DRIVE_IN2},
-              {PIN_STEER_IN1, PIN_STEER_IN2});
+const rcmap::SteerMap kSteerMap{STEER_CENTRE_US, STEER_LEFT_US, STEER_RIGHT_US};
 
-float g_throttle = 0.0f;
-float g_steer = 0.0f;
-uint32_t g_last_command_ms = 0;
-bool g_moving = false;
+Drive g_drive({PIN_ESC, LEDC_CHANNEL_ESC},
+              {ESC_NEUTRAL_US, ESC_FORWARD_US, ESC_REVERSE_US, THROTTLE_DEADBAND,
+               THROTTLE_LIMIT_FORWARD, THROTTLE_LIMIT_REVERSE, ESC_FORWARD_START_US,
+               ESC_REVERSE_START_US},
+              {PIN_SERVO_STEER, LEDC_CHANNEL_STEER}, kSteerMap, DRIVE_PWM_FREQUENCY_HZ,
+              DRIVE_PWM_RESOLUTION_BITS);
 
-// Ramp state — the deadband hunt (step 1.3's actual measurement).
-bool g_ramping = false;
-float g_ramp = 0.0f;
-uint32_t g_last_ramp_ms = 0;
-constexpr uint32_t RAMP_STEP_MS = 400;
-constexpr float RAMP_INCREMENT = 0.02f;
+float g_steer = 0.0f;  // last mapped steering demand, so a throttle command keeps it
+uint32_t g_last_throttle_ms = 0;
+bool g_throttle_live = false;
 
-void apply(float throttle, float steer) {
-  g_throttle = throttle;
-  g_steer = steer;
-  g_drive.setDrive(throttle, steer);
-  g_last_command_ms = millis();
-  g_moving = (throttle != 0.0f) || (steer != 0.0f);
-  Serial.printf("  -> fwd %+.2f   steer %+.2f\n", throttle, steer);
+String g_line;
+
+/// Why the board last reset. A steering servo stalled against its end stop can pull the
+/// ESP32's supply down far enough to trip the brownout detector, and this is what tells
+/// "the power rail sagged" apart from "the firmware crashed".
+const char *resetReasonName(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON:  return "power-on";
+    case ESP_RST_EXT:      return "external pin";
+    case ESP_RST_SW:       return "software";
+    case ESP_RST_PANIC:    return "panic / exception";
+    case ESP_RST_INT_WDT:  return "interrupt watchdog";
+    case ESP_RST_TASK_WDT: return "task watchdog";
+    case ESP_RST_WDT:      return "other watchdog";
+    case ESP_RST_BROWNOUT: return "BROWNOUT - the supply sagged";
+    default:               return "other";
+  }
 }
 
-void stopAll(const char *why) {
-  g_ramping = false;
-  g_ramp = 0.0f;
-  g_throttle = g_steer = 0.0f;
-  g_moving = false;
-  g_drive.stop();
-  Serial.printf("  -> STOPPED (%s)\n", why);
+void report() {
+  Serial.printf("  -> ESC %4u us   steer %4u us\n", g_drive.escPulseUs(),
+                g_drive.steerPulseUs());
 }
 
-/// Wiring check. Toggles one output at a time with the motors ideally DISCONNECTED, so
-/// each pin can be confirmed with a multimeter before anything can move. Bypasses Drive
-/// on purpose — this asks "is the wire where I think it is", not "does the module work".
-void pinWalk() {
-  struct Entry { const char *name; uint8_t pin; };
-  const Entry entries[] = {
-      {"L293D   1A+3A  drive fwd", PIN_DRIVE_IN1},
-      {"L293D   2A+4A  drive rev", PIN_DRIVE_IN2},
-      {"DRV8833 AIN1   steer R  ", PIN_STEER_IN1},
-      {"DRV8833 AIN2   steer L  ", PIN_STEER_IN2},
-  };
-
-  Serial.println("\n  pin walk — each output goes HIGH for 2 s, in order.");
-  Serial.println("  Meter each one against GND. Disconnect the motors first.\n");
-
-  // Both drive inputs are on LEDC since the enables went to VCC; detach them so
-  // digitalWrite works. The steering pins are already plain outputs.
-  //
-  // This walk is the fastest way to catch a repeat of the GPIO26 failure that forced the
-  // 2026-08-30 pin move: a healthy output meters ~3.3 V here, and anything markedly below
-  // that with the motors disconnected is a damaged pin, not a firmware problem.
-  ledcDetachPin(PIN_DRIVE_IN1);
-  ledcDetachPin(PIN_DRIVE_IN2);
-
-  for (const Entry &e : entries) {
-    pinMode(e.pin, OUTPUT);
-    digitalWrite(e.pin, LOW);
-  }
-
-  for (const Entry &e : entries) {
-    Serial.printf("    %s  GPIO%-2d  HIGH ... ", e.name, e.pin);
-    Serial.flush();
-    digitalWrite(e.pin, HIGH);
-    delay(2000);
-    digitalWrite(e.pin, LOW);
-    Serial.println("low again");
-  }
-
-  // Hand the pins back to Drive.
-  g_drive.begin();
-  Serial.println("\n  pin walk done — Drive reinitialised, everything stopped.\n");
+void stopThrottle(const char *why) {
+  g_drive.writeRawUs(ESC_NEUTRAL_US, g_drive.steerPulseUs());
+  g_throttle_live = false;
+  Serial.printf("  -> throttle NEUTRAL (%s)\n", why);
+  report();
 }
 
 void help() {
   Serial.println();
-  Serial.println("  commands (one per line):");
-  Serial.println("    pins      walk each output HIGH for 2 s — wiring check, motors OFF");
-  Serial.println("    f <pct>   drive motor forward, 0-100   e.g.  f 60");
-  Serial.println("    b <pct>   drive motor backward");
-  Serial.println("    l         steer full left      (steer = -1)");
-  Serial.println("    r         steer full right     (steer = +1)");
-  Serial.println("    c         steer centre         (steer =  0, spring recentres)");
-  Serial.println("    ramp      creep the throttle up 2% every 400 ms — say when it moves");
-  Serial.println("    s         stop everything");
-  Serial.println("    ?         this help");
-  Serial.println();
-  Serial.printf("  a moving motor auto-stops after %lu ms without a command\n",
-                static_cast<unsigned long>(AUTO_STOP_MS));
-  Serial.println();
+  Serial.println("  ESC + steering bench   (wheels OFF the ground)");
+  Serial.println("  f <0..1>   forward through Drive (speed cap applied)");
+  Serial.println("  b <0..1>   reverse through Drive (speed cap applied)");
+  Serial.println("  l <0..1>   steer left  through Drive");
+  Serial.println("  r <0..1>   steer right through Drive");
+  Serial.println("  c          centre steering");
+  Serial.println("  e <us>     RAW ESC pulse   800..2200 — NO speed cap");
+  Serial.println("  t <us>     RAW steer pulse 800..2200 — find the end stops");
+  Serial.println("  s / Enter  stop: neutral + centre");
+  Serial.println("  ?          this help and the config in force");
+  Serial.printf("  config: ESC %u/%u/%u us (rev/neutral/fwd), cap fwd %.2f rev %.2f\n",
+                ESC_REVERSE_US, ESC_NEUTRAL_US, ESC_FORWARD_US, THROTTLE_LIMIT_FORWARD,
+                THROTTLE_LIMIT_REVERSE);
+  Serial.printf("          motor start fwd %u us, rev %u us (the slowest speed)\n",
+                ESC_FORWARD_START_US, ESC_REVERSE_START_US);
+  Serial.printf("          steer %u/%u/%u us (left/centre/right)\n", STEER_LEFT_US,
+                STEER_CENTRE_US, STEER_RIGHT_US);
+  Serial.printf("  throttle returns to neutral %u ms after the last command\n",
+                static_cast<unsigned>(AUTO_STOP_MS));
+  report();
 }
 
-void handleLine(String line) {
+float fraction(const String &arg) {
+  const float value = arg.length() ? arg.toFloat() : 1.0f;
+  return constrain(value, 0.0f, 1.0f);
+}
+
+void handle(String line) {
   line.trim();
-  if (line.isEmpty()) return;
-  line.toLowerCase();
-
-  if (line == "s" || line == "stop") { stopAll("commanded"); return; }
-  if (line == "?" || line == "help") { help(); return; }
-  if (line == "pins") { stopAll("pin walk"); pinWalk(); return; }
-
-  if (line == "l") { apply(g_throttle, -1.0f); return; }
-  if (line == "r") { apply(g_throttle, 1.0f); return; }
-  if (line == "c") { apply(g_throttle, 0.0f); return; }
-
-  if (line == "ramp") {
-    g_ramping = true;
-    g_ramp = 0.0f;
-    g_last_ramp_ms = millis();
-    Serial.println("  ramping from 0 — watch the shaft, note the first movement.");
-    Serial.println("  That figure is the breakaway throttle step 1.5 needs. `s` to stop.");
+  if (line.length() == 0 || line == "s") {
+    g_steer = 0.0f;
+    g_drive.stop();
+    g_throttle_live = false;
+    Serial.println("  -> STOPPED");
+    report();
+    return;
+  }
+  if (line == "?" || line == "help") {
+    help();
     return;
   }
 
-  if ((line.startsWith("f ") || line.startsWith("b ")) && line.length() > 2) {
-    const float pct = constrain(line.substring(2).toFloat(), 0.0f, 100.0f);
-    const float sign = line.startsWith("f") ? 1.0f : -1.0f;
-    g_ramping = false;
-    apply(sign * pct / 100.0f, g_steer);
-    return;
-  }
-
-  Serial.printf("  unrecognised: '%s' — try ?\n", line.c_str());
-}
-
-void serviceRamp() {
-  if (!g_ramping) return;
+  const char verb = line.charAt(0);
+  const String arg = line.substring(1);
   const uint32_t now = millis();
-  if (now - g_last_ramp_ms < RAMP_STEP_MS) return;
-  g_last_ramp_ms = now;
 
-  g_ramp += RAMP_INCREMENT;
-  if (g_ramp > 1.0f) {
-    Serial.println("  ramp reached 100% — stopping.");
-    stopAll("ramp complete");
-    return;
+  switch (verb) {
+    case 'f':
+    case 'b': {
+      const float throttle = (verb == 'f' ? 1.0f : -1.0f) * fraction(arg);
+      g_drive.setDrive(throttle, g_steer);
+      g_throttle_live = true;
+      g_last_throttle_ms = now;
+      Serial.printf("  -> throttle %+.2f\n", throttle);
+      break;
+    }
+    case 'l':
+    case 'r':
+    case 'c': {
+      g_steer = verb == 'c' ? 0.0f : (verb == 'l' ? -1.0f : 1.0f) * fraction(arg);
+      // Steering only: the ESC keeps exactly what it had, so a running motor does not see
+      // even one frame of neutral. Same mapping lib/Drive uses.
+      g_drive.writeRawUs(g_drive.escPulseUs(), rcmap::steerPulseUs(kSteerMap, g_steer));
+      Serial.printf("  -> steer %+.2f\n", g_steer);
+      break;
+    }
+    case 'e': {
+      const long us = arg.toInt();
+      g_drive.writeRawUs(static_cast<uint16_t>(constrain(us, 800L, 2200L)),
+                         g_drive.steerPulseUs());
+      g_throttle_live = g_drive.escPulseUs() != ESC_NEUTRAL_US;
+      g_last_throttle_ms = now;
+      Serial.println("  -> RAW ESC (no speed cap)");
+      break;
+    }
+    case 't': {
+      const long us = arg.toInt();
+      g_drive.writeRawUs(g_drive.escPulseUs(),
+                         static_cast<uint16_t>(constrain(us, 800L, 2200L)));
+      Serial.println("  -> RAW steer — listen for the servo buzzing at an end stop");
+      break;
+    }
+    default:
+      Serial.printf("  ? unknown '%s' — type ? for help\n", line.c_str());
+      return;
   }
-  // Straight to Drive: the ramp has to sweep *through* the deadband to find it, so it
-  // must not be gated by the auto-stop that apply() arms.
-  g_drive.setDrive(g_ramp, g_steer);
-  g_last_command_ms = now;
-  g_moving = true;
-  Serial.printf("  ramp %5.0f %%\n", g_ramp * 100.0f);
+  report();
 }
 
 }  // namespace
 
 void setup() {
+  // Neutral / centre before anything else, so the ESC arms on a clean signal.
+  g_drive.begin();
   Serial.begin(115200);
-  delay(500);
-
-  g_drive.begin();  // leaves everything stopped
-
-  Serial.println();
-  Serial.println("=== Mars rover — motor bench test (step 1.3) ===");
-  Serial.println("drive  L293D,   both enables to VCC — PWM on the inputs, 1.5 kHz");
-  Serial.println("steer  DRV8833, STBY to VCC        — no PWM, three positions");
-  Serial.printf("drive  1A+3A GPIO%-2d (LEDC %d)   2A+4A GPIO%-2d (LEDC %d)\n",
-                PIN_DRIVE_IN1, LEDC_CHANNEL_DRIVE_IN1,
-                PIN_DRIVE_IN2, LEDC_CHANNEL_DRIVE_IN2);
-  Serial.printf("steer  AIN1  GPIO%-2d            AIN2  GPIO%-2d\n",
-                PIN_STEER_IN1, PIN_STEER_IN2);
-  Serial.println("600 mA per L293D channel, one drive motor each — still watch for heat.");
-  Serial.println();
-  Serial.println("Motors should be FREE-SPINNING, wheels off, chassis nowhere near this.");
+  delay(300);
+  Serial.printf("\nESC + steering bench (config of fw %s)\n", FIRMWARE_VERSION);
+  // With USB attached the monitor survives a reset, so a stall that browns the board
+  // out shows up right here as the next boot's reason.
+  Serial.printf("*** last reset: %s ***\n", resetReasonName(esp_reset_reason()));
   help();
 }
 
 void loop() {
-  static String line;
-
-  while (Serial.available() > 0) {
-    const char c = static_cast<char>(Serial.read());
-    if (c == '\n' || c == '\r') {
-      if (line.length()) { handleLine(line); line = ""; }
-    } else if (line.length() < 32) {
-      line += c;
+  while (Serial.available()) {
+    const char ch = static_cast<char>(Serial.read());
+    if (ch == '\r') continue;
+    if (ch == '\n') {
+      handle(g_line);
+      g_line = "";
+    } else {
+      g_line += ch;
     }
   }
 
-  serviceRamp();
-
-  if (g_moving && millis() - g_last_command_ms >= AUTO_STOP_MS) {
-    stopAll("auto-stop, no command");
+  if (g_throttle_live && millis() - g_last_throttle_ms >= AUTO_STOP_MS) {
+    stopThrottle("auto-stop — send a fresh command to keep going");
   }
 }

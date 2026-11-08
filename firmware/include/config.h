@@ -2,65 +2,94 @@
 #include <stdint.h>
 
 // Hardware and link configuration for the rover.
-// The drive and steering pins below are the wiring actually on the bench, last rewired
-// 2026-08-30; they are not placeholders.
+// The pins below are the wiring actually on the bench, last rewired 2026-11-07 for the
+// RC-car chassis (docs/esc-wiring.md). The steering end stops are still placeholders.
 
-// ---- Drive: L293D for the two drive motors, DRV8833 for the steering motor ----
-// The chassis chosen at step 0.2 is steered, not skid-steer: the L293D drives the rear
-// axle, the DRV8833 swings the front axle to a mechanical end stop (docs/protocol.md
-// 3.2.1).
+// ---- Drive: RC-car chassis — brushed ESC + steering servo (docs/esc-wiring.md) ----
+// **Rewired 2026-11-07.** The L293D, the DRV8833 and the spring-return steering motor are
+// gone. The drive motor is on a **TFTH 40 A brushed ESC** and the steering is the car's
+// own **servo**, so both take a standard 50 Hz hobby-servo pulse, not H-bridge PWM.
 //
-// **Rewired on 2026-08-30, and this is a two-part change.**
+// Pins. **The ESC moved GPIO32 -> GPIO23 on 2026-11-08**: GPIO32 measured 4.8 V with the
+// ESC unplugged — 5 V reaching it from the board wiring, which is a fault no firmware can
+// drive through, and the likely cause of this board's dead pins. GPIO23 is on the other
+// header row from 26/27/32, is not a strapping pin, and is silent during boot, so the ESC
+// sees nothing until begin() starts neutral. GPIO33 (steering) passes the same tests.
+// **Out of service: GPIO26 (damaged 2026-08-30), GPIO27 (reported broken 2026-11-07) and
+// GPIO32 (5 V on its net, 2026-11-08; recorded as BROKEN the same day, once the ESC was
+// confirmed working on GPIO23) — drive nothing on any of them, and keep GPIO32's pin
+// disconnected from that wiring.** GPIO25 is spare but on the same row as the faults.
 //
-// 1. The two drive motors are no longer paralleled onto one L293D channel. The front
-//    motor takes output A (1Y/2Y) and the rear motor takes output B (3Y/4Y), so each
-//    gets its own 600 mA channel instead of the pair sharing one — which is what
-//    power-budget finding F8 was about. They still have no independent control, and a
-//    steered chassis wants none: the inputs are *tied together in the wiring loom*,
-//    IN1+IN3 to one GPIO and IN2+IN4 to the other, so the two channels always see the
-//    same direction and the same duty. One command, two bridges, twice the current
-//    ceiling.
-//
-//    **Both L293D enables (1,2EN and 3,4EN) are strapped to VCC on the board**, so the
-//    firmware no longer owns an enable pin and the PWM has moved onto the direction
-//    inputs — the same sign-magnitude scheme the DRV8833 used at step 1.3, back again
-//    for a different reason. Two consequences:
-//      * that is TWO LEDC channels for the drive, not one;
-//      * with the enable held high there is no high-impedance state, so IN1=IN2=LOW is
-//        a **brake**, not a coast. Step 1.6's coast-distance figure has to be measured
-//        against that, and a stop now stops the rover shorter than the old wiring did.
-//
-// 2. The steering motor moved to a **DRV8833**, driven on IN1/IN2 with **STBY strapped
-//    to VCC** — so, again, no enable pin in firmware. Both inputs LOW is a genuine
-//    coast on a DRV8833, so the return spring still centres the axle unopposed, which
-//    is what docs/protocol.md 6.1 relies on. The steering keeps its three positions and
-//    full rail voltage; step 1.3 measured that a PWM-limited steering channel cannot
-//    shift the axle against its spring.
-//
-// **PIN_DRIVE_IN1 moved GPIO26 -> GPIO32 on 2026-08-30.** GPIO26 measured 0.9 V driving
-// forward where GPIO27 measured a clean 3.3 V driving back, after the pin had been
-// working — i.e. the output driver is damaged, not mis-driven, and no firmware change
-// recovers it. GPIO32 is the replacement because it is free (the DRV8833's STBY strap
-// gave it back), it is not a strapping pin, and unlike GPIO14/GPIO12 it emits nothing
-// during boot — a pin that pulses at reset is a pin that twitches the drive motors
-// before setup() runs. **Do not put the drive back on GPIO26.**
-constexpr uint8_t PIN_DRIVE_IN1 = 32;  // -> L293D 1A + 3A, DIP pins 2 and 10 (tied)
-constexpr uint8_t PIN_DRIVE_IN2 = 27;  // -> L293D 2A + 4A, DIP pins 7 and 15 (tied)
-constexpr uint8_t PIN_STEER_IN1 = 25;  // -> DRV8833 AIN1
-constexpr uint8_t PIN_STEER_IN2 = 33;  // -> DRV8833 AIN2
+// The ESC's own signal input pulls up to ~3.8 V when unplugged (measured 2026-11-08). The
+// pull-up is weak, so 330 R series is adequate; 1 k (or 3 x 330 R) gives more margin,
+// since 3.8 V is above the ESP32's 3.6 V pin limit. The pull-down is optional on GPIO23
+// (silent at boot): 4.7-47 k, or none — the ESC then sees a steady high, not a pulse,
+// and waits for neutral.
+constexpr uint8_t PIN_ESC = 23;          // -> ESC signal (white/orange), 330 R-1 k series
+constexpr uint8_t PIN_SERVO_STEER = 33;  // -> steering servo signal, 330 R series, 10 k down
 
-// LEDC hardware-PWM channels — the drive takes two of them.
+// LEDC channels 0+1 share timer 0, which drops from the L293D's 1.5 kHz to 50 Hz: an ESC
+// and a servo both want 50 Hz frames. The camera head keeps timer 1 (channels 2+3).
+constexpr uint8_t LEDC_CHANNEL_ESC = 0;
+constexpr uint8_t LEDC_CHANNEL_STEER = 1;
+constexpr uint32_t DRIVE_PWM_FREQUENCY_HZ = 50;
+constexpr uint8_t DRIVE_PWM_RESOLUTION_BITS = 16;  // 0.31 us per count at 50 Hz
+
+// ESC pulse widths. The usual car-ESC convention; the ESC arms on neutral at power-up and
+// the failsafe holds neutral rather than stopping the pulses (lib/Drive). **If FORWARD
+// drives the car backwards**, swap ESC_FORWARD_US and ESC_REVERSE_US (or the two motor
+// leads) — nothing else changes.
+constexpr uint16_t ESC_NEUTRAL_US = 1500;
+constexpr uint16_t ESC_FORWARD_US = 2000;
+constexpr uint16_t ESC_REVERSE_US = 1000;
+
+// |throttle| below this is neutral, so a stick resting a hair off centre does not creep.
+// The ESC has its own neutral band on top of this.
+constexpr float THROTTLE_DEADBAND = 0.05f;
+
+// **The speed cap: 30% of the ESC's travel**, set 2026-11-08 (0.75 on 2026-11-07, because
+// the 370 motor is too powerful at full; then 0.40 and 0.20 on 2026-11-08).
+// Full stick reaches this fraction of the ESC's travel — scaled, not clipped, so half
+// stick is half the cap and the console's TRANSIT/PRECISION modes keep their meaning.
+// 0.30 forward is 1650 us, reverse 1350 us, so the stick's whole travel spans the start
+// points below to these: 1550-1650 forward, 1450-1350 reverse. Change it here;
+// nothing else changes. Keep it above the start points, or full stick becomes the start
+// point (lib/RcMap clamps the start to the cap).
+constexpr float THROTTLE_LIMIT_FORWARD = 0.30f;
+constexpr float THROTTLE_LIMIT_REVERSE = 0.30f;
+
+// **The minimum speed: where the motor starts to turn.** The ESC ignores pulses near
+// neutral (its own dead zone), and the 370 needs more again to break the car away on the
+// floor, so the slowest demand jumps straight here instead of creeping up through pulses
+// that do nothing. Full stick is still the cap above. **Raise these to make the slowest
+// speed faster** — forward up from 1500, reverse down from 1500.
 //
-// With the L293D enables strapped high, there is no enable pin to modulate: the PWM goes
-// on whichever direction input matches the commanded direction, and the other input is
-// held LOW. Each input therefore needs its own LEDC channel.
+// **Forward measured 2026-11-07**: wheels off the ground, the motor first turned at
+// `e 1540` (docs/esc-wiring.md 4 step 7) — a 40 us dead zone. The old console floor only
+// reached ~1538 us, just short of it, which is why the slowest stick did nothing. Set
+// 20 us above that for the car's weight on the floor. **Reverse measured the same day**:
+// first turned at `e 1440`, a 60 us dead zone — wider than forward's — so set 20 us
+// beyond, at 1420. On most car ESCs reverse only engages after neutral is seen first
+// (forward, neutral, reverse).
 //
-// The steering claims no LEDC channel at all: it is three-position, so there is no speed
-// to modulate (step 1.3).
-//
-// So channels 2 upward are free for the Phase 3 servos, which take 2 and 3 (below).
-constexpr uint8_t LEDC_CHANNEL_DRIVE_IN1 = 0;
-constexpr uint8_t LEDC_CHANNEL_DRIVE_IN2 = 1;
+// **2026-11-08: 1550 / 1450**, set by the user after trying 1560 / 1420, 1500 (off — too
+// much dead stick) and 1570 / 1440. Forward sits 10 us past the measured start; reverse
+// sits 10 us *inside* the ESC's dead zone (measured start 1440), so the lightest reverse
+// stick may not move the car — the motor picks up a little further out. Set either to
+// 1500 to switch it off.
+constexpr uint16_t ESC_FORWARD_START_US = 1550;
+constexpr uint16_t ESC_REVERSE_START_US = 1450;
+
+// Steering servo pulse widths. **Measured 2026-11-07 on the bench** with `t` in the
+// motortest env (docs/esc-wiring.md 4 step 6): the linkage reaches full left at 1100 us
+// and full right at 1900 us. The values below sit **20 us inside each**, so holding full
+// lock never jams the servo against the linkage — a jammed servo draws its stall current
+// for as long as the stick is held, and stall current is what browns the board out.
+// **If LEFT steers right**, swap STEER_LEFT_US and STEER_RIGHT_US. STEER_CENTRE_US is the
+// trim: nudge it until a centred stick tracks straight.
+constexpr uint16_t STEER_CENTRE_US = 1500;
+constexpr uint16_t STEER_LEFT_US = 1120;
+constexpr uint16_t STEER_RIGHT_US = 1880;
 
 // ---- Servos: two JX PDI-D56MG, camera pan and tilt (Phase 3) ----
 // Revised 2026-09-19: the mast no longer moves, so its pan/tilt pair is gone and only the
@@ -82,7 +111,7 @@ constexpr uint8_t PIN_SERVO_CAM_PAN = 18;
 constexpr uint8_t PIN_SERVO_CAM_TILT = 19;
 
 // LEDC channels share a timer in pairs on arduino-esp32 2.x (0+1, 2+3, ...), and a timer
-// has one frequency. The drive's pair holds timer 0 at 1.5 kHz, so the servos take 2+3 —
+// has one frequency. The drive (ESC + steering) holds timer 0, so the camera takes 2+3 —
 // timer 1 at 50 Hz — and never touch the drive's timer.
 constexpr uint8_t LEDC_CHANNEL_SERVO_CAM_PAN = 2;
 constexpr uint8_t LEDC_CHANNEL_SERVO_CAM_TILT = 3;
@@ -137,25 +166,18 @@ constexpr float CAM_PAN_US_PER_DEG = -10.0f;
 constexpr float CAM_TILT_US_PER_DEG = 10.0f;
 
 // ---- Power monitoring ----
-// LiPo pack through a resistor divider into an ADC pin.
+// 2S LiPo through a **220 k / 22 k** divider into GPIO34 (docs/esc-wiring.md 1.1 and 3).
+// Ratio (220 + 22) / 22 = 11.0, so a full 2S pack (8.4 V) is 0.76 V on the pin and even a
+// 3S pack (12.6 V) only 1.15 V — far under the 3.6 V absolute maximum whatever is plugged
+// in. That closes power-budget finding F5 for this wiring.
 //
-// ⚠️ DO NOT WIRE A DIVIDER TO MATCH THE 2.0 BELOW. Step 0.3 found it unsafe against any
-// pack this repo has considered: 12.6 V / 2.0 puts 6.3 V on GPIO34 against a 3S pack, and
-// 8.4 V / 2.0 still puts 4.2 V there against the 2S pack now recommended. The ESP32's
-// absolute maximum on any GPIO is 3.6 V. See docs/power-budget.md finding F5.
-//
-// Its recommendation moved with the pack: **100k/47k — ratio 3.13, giving 2.69 V at a 2S
-// full charge** (it was 100k/27k / 4.70 while a 3S pack was assumed; that pair is still
-// *safe* on 2S at 1.79 V, it merely wastes ADC range). The 2S recommendation itself is
-// awaiting the 0.3 review gate, which is why nothing below has been changed yet.
-//
-// Left at 2.0 deliberately until 0.3's review gate picks the resistors: the constant
-// follows the divider that gets built, not the other way round. Fix it at step 1.3 when
-// the real one is on the board, then calibrate against a meter at 1.7 (risk R4).
+// Read with analogReadMilliVolts(), which applies the chip's eFuse calibration and the
+// attenuation, at **6 dB** (about 0.15-1.75 V): that keeps 0.55-0.76 V in the ADC's
+// linear region and roughly halves the step size against the default 11 dB. Calibrate
+// against a meter at step 1.7 (risk R4) — 5% resistors can put the ratio off by ~9%,
+// and BATTERY_DIVIDER_RATIO is where the correction goes.
 constexpr uint8_t PIN_BATTERY_SENSE = 34;
-constexpr float BATTERY_DIVIDER_RATIO = 2.0f;
-constexpr float ADC_REFERENCE_V = 3.3f;
-constexpr int ADC_MAX_COUNTS = 4095;
+constexpr float BATTERY_DIVIDER_RATIO = 11.0f;
 
 // ---- Status LED ----
 // The only diagnostic the rover has when it is running on battery with no serial cable.
@@ -189,7 +211,8 @@ constexpr char ROVER_SUBNET_MASK[] = "255.255.255.0";
 // build produced a run (docs/protocol.md 4.1).
 // 0.2.0: camera pan/tilt head actuated. 0.2.1: tilt direction reversed. 0.2.2: tilt down
 // to -60 deg. 0.2.3: both axes reversed after the servos were re-positioned.
-constexpr char FIRMWARE_VERSION[] = "0.2.3";
+// 0.3.0: RC-car chassis — ESC + proportional steering servo, `steerprop`, 220k/22k divider.
+constexpr char FIRMWARE_VERSION[] = "0.3.0";
 
 // Failsafe: if no drive command arrives within this window, the motors are cut.
 // A dropped Wi-Fi link must never leave the rover driving into the glass wall (risk R1).

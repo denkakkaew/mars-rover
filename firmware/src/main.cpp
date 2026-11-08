@@ -6,7 +6,8 @@
 //
 //   lib/Protocol — JSON frame <-> typed Command, and telemetry serialisation
 //   lib/Safety   — the failsafe state machine
-//   lib/Drive    — H-bridge throttle and steering
+//   lib/RcMap    — throttle/steering demand -> ESC and steering-servo pulse
+//   lib/Drive    — the ESC and steering servo on LEDC
 //   lib/Aim      — camera pan/tilt travel limits and angle -> pulse
 //   lib/PanTilt  — the two head servos on LEDC
 //
@@ -18,6 +19,7 @@
 
 #include <Arduino.h>
 #include <WebSocketsServer.h>
+#include <atomic>
 #include <WiFi.h>
 
 #include "Drive.h"
@@ -29,8 +31,15 @@
 
 namespace {
 
-Drive g_drive({PIN_DRIVE_IN1, PIN_DRIVE_IN2, LEDC_CHANNEL_DRIVE_IN1, LEDC_CHANNEL_DRIVE_IN2},
-              {PIN_STEER_IN1, PIN_STEER_IN2});
+// The RC-car drivetrain: ESC + steering servo (docs/esc-wiring.md). Speed cap, deadband
+// and direction are config.h's; the mapping is lib/RcMap's and is host-tested.
+Drive g_drive({PIN_ESC, LEDC_CHANNEL_ESC},
+              {ESC_NEUTRAL_US, ESC_FORWARD_US, ESC_REVERSE_US, THROTTLE_DEADBAND,
+               THROTTLE_LIMIT_FORWARD, THROTTLE_LIMIT_REVERSE, ESC_FORWARD_START_US,
+               ESC_REVERSE_START_US},
+              {PIN_SERVO_STEER, LEDC_CHANNEL_STEER},
+              {STEER_CENTRE_US, STEER_LEFT_US, STEER_RIGHT_US},
+              DRIVE_PWM_FREQUENCY_HZ, DRIVE_PWM_RESOLUTION_BITS);
 
 // The camera pan/tilt head: two D56MGs (docs/servo-wiring.md). Limits and direction are
 // config.h's; the mapping is lib/Aim's and is host-tested.
@@ -49,6 +58,76 @@ safety::Failsafe g_failsafe(COMMAND_TIMEOUT_MS);
 safety::State g_state = safety::State::Safe;
 uint32_t g_last_telemetry_ms = 0;
 
+// ---- Drive watchdog: a failsafe the main loop cannot block (2026-11-07) ---------------
+//
+// lib/Safety's command timeout is only enforced when loop() runs. On 2026-11-07 the link
+// log showed loop() stuck for up to 4.3 s at a time inside the WebSocket library: an
+// ESP32 WiFiClient write waits for the peer's TCP ACK, retrying up to 10 x 1 s, and while
+// it waits nothing else on this core runs. A rover armed at that moment kept its last
+// throttle and steering for the whole stall — 4 s of driving at the glass with no console.
+//
+// This task is the backstop. It runs at a higher priority than loopTask, so it preempts
+// a loop that is blocked, and every DRIVE_WATCHDOG_PERIOD_MS it applies the same rule
+// Safety does: no failsafe-refreshing command for COMMAND_TIMEOUT_MS while the drive is
+// off neutral -> neutral + centre. It does not replace Safety (which still owns arming,
+// the handshake and disconnects); it only guarantees the motor stops on time.
+//
+// Every write to g_drive goes through driveSet()/driveStop() under g_drive_mutex, so the
+// task and the loop never interleave half a drive update, and the check-and-stop is one
+// step: a command that arrives during the check is either seen as fresh or applied after
+// the stop, never undone by it.
+constexpr uint32_t DRIVE_WATCHDOG_PERIOD_MS = 20;
+
+SemaphoreHandle_t g_drive_mutex = nullptr;
+std::atomic<uint32_t> g_drive_refresh_ms{0};  // last command that refreshed the failsafe
+std::atomic<bool> g_drive_moving{false};      // drive is off neutral/centre right now
+
+void driveSet(float throttle, float steer) {
+  xSemaphoreTake(g_drive_mutex, portMAX_DELAY);
+  g_drive.setDrive(throttle, steer);
+  g_drive_moving = g_drive.escPulseUs() != ESC_NEUTRAL_US ||
+                   g_drive.steerPulseUs() != STEER_CENTRE_US;
+  xSemaphoreGive(g_drive_mutex);
+}
+
+void driveStop() {
+  xSemaphoreTake(g_drive_mutex, portMAX_DELAY);
+  g_drive.stop();
+  g_drive_moving = false;
+  xSemaphoreGive(g_drive_mutex);
+}
+
+void driveWatchdogTask(void *) {
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(DRIVE_WATCHDOG_PERIOD_MS));
+    if (!g_drive_moving) continue;
+
+    uint32_t silent_ms = 0;
+    bool tripped = false;
+    xSemaphoreTake(g_drive_mutex, portMAX_DELAY);
+    const uint32_t now = millis();
+    if (g_drive_moving && safety::timedOut(g_drive_refresh_ms, now, COMMAND_TIMEOUT_MS)) {
+      g_drive.stop();
+      g_drive_moving = false;
+      tripped = true;
+      silent_ms = now - g_drive_refresh_ms;
+    }
+    xSemaphoreGive(g_drive_mutex);
+
+    if (tripped) {
+      log_w("Drive watchdog: no command for %u ms — neutral + centre",
+            static_cast<unsigned>(silent_ms));
+    }
+  }
+}
+
+// Set at boot if the last reset was a brownout. The LED then double-blinks for
+// BROWNOUT_SIGNAL_MS (serviceStatusLed), because on battery there is no serial monitor
+// to read the reason from - and a supply sag is the likeliest reason a free-running
+// rover drops its link (a stalled servo, a motor breaking away).
+bool g_brownout_boot = false;
+constexpr uint32_t BROWNOUT_SIGNAL_MS = 15000;
+
 uint32_t g_connected_at_ms = 0;
 bool g_hello_received = false;
 bool g_handshake_expired = false;
@@ -61,11 +140,11 @@ bool g_handshake_expired = false;
 // mast, but the token keeps its wire name: renaming it would break every console for the
 // sake of a word (docs/protocol.md 3.4).
 //
-// "steer3" declares three-position steering, so the console knows a `steer` of 0.3 will be
-// rounded away rather than honoured. Exactly one steering token must accompany "drive" —
-// a later proportional-steering build swaps it for "steerprop" and needs no version bump,
-// which is the whole reason `steer` stayed a float on the wire (docs/protocol.md 3.2.1).
-const char *const kCapabilities[] = {"drive", "steer3", "mast"};
+// "steerprop" declares proportional steering: the RC-car chassis (fw 0.3.0) has a servo,
+// so a `steer` of 0.3 is honoured as 30% of lock. It replaced "steer3" with no version
+// bump, which is the whole reason `steer` stayed a float on the wire (docs/protocol.md
+// 3.2.1). Exactly one steering token must accompany "drive".
+const char *const kCapabilities[] = {"drive", "steerprop", "mast"};
 
 // One shared outbound buffer. Every frame is built and sent within a single call, and
 // the WebSocket library copies before returning, so there is nothing to overlap.
@@ -83,9 +162,100 @@ void sendFrame(uint8_t client, size_t length) {
   g_server.sendTXT(client, g_out, length);
 }
 
+/// Why the board last reset. A steering servo stalled against its end stop can pull the
+/// ESP32's supply down far enough to trip the brownout detector, and this is what tells
+/// "the power rail sagged" apart from "the firmware crashed".
+const char *resetReasonName(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON:  return "power-on";
+    case ESP_RST_EXT:      return "external pin";
+    case ESP_RST_SW:       return "software";
+    case ESP_RST_PANIC:    return "panic / exception";
+    case ESP_RST_INT_WDT:  return "interrupt watchdog";
+    case ESP_RST_TASK_WDT: return "task watchdog";
+    case ESP_RST_WDT:      return "other watchdog";
+    case ESP_RST_BROWNOUT: return "BROWNOUT - the supply sagged";
+    default:               return "other";
+  }
+}
+
 float readBatteryVolts() {
-  const int counts = analogRead(PIN_BATTERY_SENSE);
-  return (counts * ADC_REFERENCE_V / ADC_MAX_COUNTS) * BATTERY_DIVIDER_RATIO;
+  // Calibrated millivolts (eFuse Vref, attenuation applied), not raw counts.
+  return (analogReadMilliVolts(PIN_BATTERY_SENSE) / 1000.0f) * BATTERY_DIVIDER_RATIO;
+}
+
+// ---- Link-gap diagnostics (2026-11-07) -----------------------------------------------
+//
+// Added to chase the console's TELEMETRY STALE with no load and USB power, where the board
+// was shown not to reset. A linked console pings every 250 ms (rover_link.gd
+// PING_INTERVAL_SEC), so silence from it longer than LINK_GAP_LOG_MS means frames are
+// being held up somewhere between the PC and here. These lines put each gap on the serial
+// log with its timestamp and the RSSI at the time, to line up against what the console
+// showed. Logging only: nothing here touches the failsafe, which keeps its own timer.
+//
+//   "Link: console silent ..."     a gap began (logged once, at the threshold)
+//   "Link: frames resumed ..."     it ended, with its full length
+//   "Link: telemetry send ..."     a send failed or blocked — the rover's own side stalling
+//   "Link: loop pass took ..."     the firmware itself stopped servicing the socket
+//   "Link: ok ..."                 every LINK_SUMMARY_MS while connected: RSSI and the
+//                                  longest gap since the last summary
+//
+// Before the handshake the console only sends a hello once a second, so the threshold is
+// widened until one has arrived — otherwise every connect would log a false gap.
+constexpr uint32_t LINK_GAP_LOG_MS = 500;
+constexpr uint32_t LINK_GAP_PRE_HELLO_MS = 1500;
+constexpr uint32_t LINK_SLOW_SEND_MS = 50;
+constexpr uint32_t LINK_SLOW_LOOP_MS = 100;
+constexpr uint32_t LINK_SUMMARY_MS = 10000;
+
+uint32_t g_last_rx_ms = 0;
+bool g_link_in_gap = false;
+uint32_t g_longest_gap_ms = 0;
+uint32_t g_last_summary_ms = 0;
+uint32_t g_frames_rx = 0;
+
+void linkResetCounters(uint32_t now) {
+  g_last_rx_ms = now;
+  g_link_in_gap = false;
+  g_longest_gap_ms = 0;
+  g_last_summary_ms = now;
+  g_frames_rx = 0;
+}
+
+/// Every inbound frame, whether or not it parses — this measures the link, not the console.
+void linkNoteFrame(uint32_t now) {
+  const uint32_t gap = now - g_last_rx_ms;
+  if (gap > g_longest_gap_ms) g_longest_gap_ms = gap;
+  if (g_link_in_gap) {
+    log_w("Link: frames resumed after %u ms of silence (RSSI %d dBm)",
+          static_cast<unsigned>(gap), static_cast<int>(WiFi.RSSI()));
+    g_link_in_gap = false;
+  }
+  g_last_rx_ms = now;
+  ++g_frames_rx;
+}
+
+void serviceLinkDiagnostics(uint32_t now) {
+  if (!g_failsafe.inputs().connected) return;
+
+  const uint32_t gap = now - g_last_rx_ms;
+  const uint32_t threshold = g_hello_received ? LINK_GAP_LOG_MS : LINK_GAP_PRE_HELLO_MS;
+  if (!g_link_in_gap && gap >= threshold) {
+    g_link_in_gap = true;
+    log_w("Link: console silent for %u ms%s (RSSI %d dBm)", static_cast<unsigned>(gap),
+          g_hello_received ? "" : ", no hello yet", static_cast<int>(WiFi.RSSI()));
+  }
+
+  if (now - g_last_summary_ms >= LINK_SUMMARY_MS) {
+    const uint32_t longest = g_longest_gap_ms > gap ? g_longest_gap_ms : gap;
+    log_i("Link: ok, %u frames in %u s, longest gap %u ms, RSSI %d dBm",
+          static_cast<unsigned>(g_frames_rx),
+          static_cast<unsigned>((now - g_last_summary_ms) / 1000),
+          static_cast<unsigned>(longest), static_cast<int>(WiFi.RSSI()));
+    g_last_summary_ms = now;
+    g_longest_gap_ms = 0;
+    g_frames_rx = 0;
+  }
 }
 
 protocol::Mode reportedMode(safety::State state) {
@@ -103,7 +273,7 @@ void applyState(safety::State next) {
   if (next != safety::State::Armed) {
     log_w("Failsafe: entering %s — stopping",
           protocol::modeName(reportedMode(next)));
-    g_drive.stop();
+    driveStop();
   }
   g_state = next;
 }
@@ -133,6 +303,7 @@ void handleCommand(uint8_t client, const protocol::Command &cmd, uint32_t now) {
 
   if (protocol::refreshesFailsafe(cmd.type)) {
     g_failsafe.onCommand(now);
+    g_drive_refresh_ms = now;  // the drive watchdog's copy of the same rule
   }
   applyState(g_failsafe.state(now));
 
@@ -156,12 +327,12 @@ void handleCommand(uint8_t client, const protocol::Command &cmd, uint32_t now) {
 
     case protocol::CommandType::Stop:
       // Honoured in every state, including safe mode and on a version mismatch.
-      g_drive.stop();
+      driveStop();
       break;
 
     case protocol::CommandType::Drive:
       if (g_state == safety::State::Armed) {
-        g_drive.setDrive(cmd.throttle, cmd.steer);
+        driveSet(cmd.throttle, cmd.steer);
       }
       break;
 
@@ -189,18 +360,21 @@ void onWebSocketEvent(uint8_t client, WStype_t type, uint8_t *payload, size_t le
       g_connected_at_ms = now;
       g_hello_received = false;
       g_handshake_expired = false;
+      linkResetCounters(now);
       g_failsafe.onConnect();
       applyState(g_failsafe.state(now));
       break;
 
     case WStype_DISCONNECTED:
-      log_w("Console %u disconnected — stopping", client);
-      g_drive.stop();  // belt and braces: the state change below stops us too
+      log_w("Console %u disconnected — stopping (last frame %u ms ago, RSSI %d dBm)", client,
+            static_cast<unsigned>(now - g_last_rx_ms), static_cast<int>(WiFi.RSSI()));
+      driveStop();  // belt and braces: the state change below stops us too
       g_failsafe.onDisconnect();
       applyState(g_failsafe.state(now));
       break;
 
     case WStype_TEXT:
+      linkNoteFrame(now);
       handleCommand(client, protocol::parse(reinterpret_cast<const char *>(payload), length),
                     now);
       break;
@@ -233,7 +407,13 @@ void publishTelemetry() {
     log_e("Telemetry frame did not fit — dropped");
     return;
   }
-  g_server.broadcastTXT(g_out, length);
+  const uint32_t started = millis();
+  const bool sent = g_server.broadcastTXT(g_out, length);
+  const uint32_t took = millis() - started;
+  if (!sent || took >= LINK_SLOW_SEND_MS) {
+    log_w("Link: telemetry send %s, took %u ms", sent ? "slow" : "FAILED",
+          static_cast<unsigned>(took));
+  }
 }
 
 
@@ -334,6 +514,8 @@ void serviceWifi(uint32_t now) {
 //     brief pulse     80 ms on, 1420 ms off  associated, waiting for a console
 //     even blink     500 ms on, 500 ms off   console linked, safe — not armed
 //     solid on                               ARMED: a command can move the rover now
+//     double blink, 1 s period, first 15 s   the LAST RESET WAS A BROWNOUT: the supply
+//                                            sagged - check the 5 V rail and grounds
 //
 // Anything else — dark, or a repeating boot flicker — is the board resetting, which on
 // battery usually means the supply is sagging under motor current rather than a firmware
@@ -352,6 +534,11 @@ BlinkPattern statusPattern() {
 }
 
 void serviceStatusLed(uint32_t now) {
+  if (g_brownout_boot && now < BROWNOUT_SIGNAL_MS) {
+    const uint32_t t = now % 1000;
+    digitalWrite(PIN_STATUS_LED, (t < 100 || (t >= 200 && t < 300)) ? HIGH : LOW);
+    return;
+  }
   const BlinkPattern pattern = statusPattern();
   const bool on = (now % pattern.period_ms) < pattern.on_ms;
   digitalWrite(PIN_STATUS_LED, on ? HIGH : LOW);
@@ -360,20 +547,34 @@ void serviceStatusLed(uint32_t now) {
 }  // namespace
 
 void setup() {
-  // Motor pins first, before anything that can take time. GPIO14 is a bootstrap pin and
-  // the ROM loader drives it while the board comes up, so the drive enable is briefly
-  // outside this firmware's control on every reset; this is the earliest point at which
-  // it can be pulled down and the motors made safe.
+  // Drive first, before anything that can take time. Until here the ESC and steering
+  // lines sit low on their pull-downs and the ESC sees no signal, so it has not armed;
+  // begin() starts neutral / centre, which is what the ESC arms on. The sooner that
+  // pulse is steady, the sooner the ESC is ready — and it is never anything but neutral
+  // until a console has handshaken and commanded otherwise.
   g_drive.begin();
+
+  // The watchdog starts the moment the drive exists, before Wi-Fi or the server. Core 1
+  // (loopTask's own core) at priority 3 against loopTask's 1, so a blocked loop is
+  // preempted rather than waited for; Wi-Fi runs on core 0 and is not disturbed.
+  g_drive_mutex = xSemaphoreCreateMutex();
+  xTaskCreatePinnedToCore(driveWatchdogTask, "drive_wd", 3072, nullptr, 3, nullptr, 1);
 
   // The head centres here, on every reset: its signal lines have sat low on their
   // pull-downs until now, so the servos had no pulses and were limp (docs/servo-wiring.md).
   g_head.begin();
 
+  // 6 dB keeps the divider's 0.55-0.76 V in the ADC's linear region (config.h).
+  analogSetPinAttenuation(PIN_BATTERY_SENSE, ADC_6db);
+
   pinMode(PIN_STATUS_LED, OUTPUT);
   digitalWrite(PIN_STATUS_LED, LOW);
 
   Serial.begin(115200);
+
+  const esp_reset_reason_t reason = esp_reset_reason();
+  g_brownout_boot = (reason == ESP_RST_BROWNOUT);
+  log_w("Last reset: %s", resetReasonName(reason));
 
   // Order matters here, and it is narrower than it looks. The server must come up:
   //
@@ -396,12 +597,21 @@ void setup() {
 }
 
 void loop() {
+  const uint32_t pass_started = millis();
   g_server.loop();
 
   const uint32_t now = millis();
 
+  // If the firmware itself stalls, it stops reading the socket, and that would look like
+  // a silent console from here — this line is what tells the two apart.
+  if (now - pass_started >= LINK_SLOW_LOOP_MS) {
+    log_w("Link: loop pass took %u ms (socket not serviced)",
+          static_cast<unsigned>(now - pass_started));
+  }
+
   serviceWifi(now);
   serviceStatusLed(now);
+  serviceLinkDiagnostics(now);
 
   // A console that never identifies itself is treated as an unknown protocol version
   // (docs/protocol.md 5). Nothing could have armed in the meantime — Safety refuses to

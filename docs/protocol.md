@@ -162,6 +162,13 @@ command is a speed and a direction, not two side speeds.
 
 #### 3.2.1 `steer` is a float, but this build's steering is three-position
 
+> **Superseded on the hardware by firmware 0.3.0 (2026-11-07)**, with no change to this
+> contract. The RC-car chassis ([esc-wiring.md](esc-wiring.md)) steers with a servo, so the
+> rover advertises **`steerprop`** and honours `steer` continuously: lib/RcMap maps it
+> linearly onto the servo's left / centre / right pulses. The table below is what a
+> `steer3` build does, and stays the reference for one. **A failsafe now actively centres
+> the steering** — a servo holds its last angle, unlike the old spring-return axle (§6.1).
+
 Confirmed at step 0.2 ([chassis-envelope §8.5](chassis-envelope.md)): the steering motor drives
 to a **mechanical end stop**, and a spring recentres it when unpowered. There is no
 intermediate angle — the front axle is at full left lock, straight, or full right lock.
@@ -302,8 +309,8 @@ Sent once, in response to the console's `hello`.
 | `mast` | Camera pan/tilt head fitted and actuated (§3.4). Advertised since firmware 0.2.0 |
 | `rfid` | RFID reader fitted and polled (step 2.6) |
 
-`caps` is how the console knows what is real on this build. Since firmware 0.2.0 it is
-`["drive","steer3","mast"]`; `rfid` appears when Phase 2 fits the reader. The console **must** disable controls for absent capabilities rather than sending
+`caps` is how the console knows what is real on this build. Since firmware 0.3.0 it is
+`["drive","steerprop","mast"]` (0.2.x reported `steer3`); `rfid` appears when Phase 2 fits the reader. The console **must** disable controls for absent capabilities rather than sending
 commands into a void — this is what makes the Scene 1 readiness row (step S.6) honest instead
 of decorative.
 
@@ -709,7 +716,7 @@ what writing it three times is for.
 |---|---|---|---|---|
 | `drive` (v2: `fwd`/`steer`) | ✅ S.14 | ✅ S.15 | ✅ S.15 | All three back in step at v2 |
 | Retired `l`/`r` rejection (§2.3a) | ✅ S.14 | n/a — sender | ✅ S.15 | The simulator mirrors the firmware's strict parsing, so it owes this check too |
-| `caps` steering token (§4.1) | ✅ reports `steer3` | ✅ refuses to arm without exactly one | ✅ advertises, and can be told to omit it | Drop it with `--caps drive` to check the console still refuses |
+| `caps` steering token (§4.1) | ✅ reports `steerprop` since 0.3.0 (`steer3` before) | ✅ refuses to arm without exactly one | ✅ defaults to `steerprop` and honours it proportionally; `--caps drive,steer3` restores the three-position axle | Drop it with `--caps drive` to check the console still refuses |
 | Steering ⇒ no pivot (§3.2) | n/a — `Drive` just actuates | ✅ pad says so when steering with no throttle | ✅ bicycle model; `w ∝ v`, so a stationary rover cannot turn | The behaviour S.15 exists to make true everywhere |
 | `stop` | ✅ | ✅ | ✅ | F2 closed in S.6 — `send_stop()`, wired to the STOP button. Unchanged by S.14 |
 | `mast` (camera pan/tilt) | ✅ **actuated**, 0.2.0 — `lib/Aim` + `lib/PanTilt`, clamped, armed-only | ✅ hold-to-move pad + W/A/S/D, clamped | ✅ actuated, clamped | 2026-09-19. Gated on `Armed` like `drive`; a `mast` frame is itself a fresh command, so it arms the rover after the handshake |

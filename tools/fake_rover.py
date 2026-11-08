@@ -454,6 +454,9 @@ class Rover:
     ## Residual steering angle in degrees when commanded straight — linkage slop and
     ## wheel misalignment. Signed. This is why a commanded straight line curves.
     drift: float = 0.5
+    ## True when this build advertises `steerprop` (fw 0.3.0's servo steering): `steer`
+    ## is honoured as a fraction of lock instead of rounded onto three positions.
+    proportional_steer: bool = False
 
     # Actual body state, which lags the commanded one.
     v: float = 0.0  # m/s along the heading
@@ -572,10 +575,13 @@ class Rover:
 
         model = self.model
 
-        # Three positions, not a proportional angle: the same threshold the firmware
-        # applies in Drive::applySteer. Inside the centre band the motor is unpowered and
-        # the spring pulls the axle back to straight.
-        if steer_cmd <= -STEER_THRESHOLD:
+        # `steerprop` (fw 0.3.0, a steering servo): the demand is a fraction of lock,
+        # as lib/RcMap maps it. `steer3` (fw <= 0.2.x): three positions, the same
+        # threshold the old Drive::applySteer applied, with the spring centring the axle
+        # inside the band.
+        if self.proportional_steer:
+            target_angle = clamp(steer_cmd, -1.0, 1.0) * self.steer_lock
+        elif steer_cmd <= -STEER_THRESHOLD:
             target_angle = -self.steer_lock
         elif steer_cmd >= STEER_THRESHOLD:
             target_angle = self.steer_lock
@@ -722,6 +728,7 @@ class Simulator:
         self.loss_pct = args.loss
         self.drop_after = args.drop_after
         self.caps = [c.strip() for c in args.caps.split(",") if c.strip()]
+        self.rover.proportional_steer = "steerprop" in self.caps
         self.version = args.protocol_version
         self.telemetry_on = True
         self.quiet = args.quiet
@@ -1411,12 +1418,14 @@ def main() -> int:
                         help="hard-disconnect a console this long after it connects")
     parser.add_argument("--stall-after", type=float, default=0.0, metavar="SEC",
                         help="stop sending telemetry this long after start, link left up")
-    # `steer3` declares three-position steering (docs/protocol.md 4.1). Exactly one
-    # steering token must accompany `drive`, so the console knows whether a `steer` of
-    # 0.3 will be honoured or rounded away; drop it deliberately to check that the
-    # console refuses to arm rather than guessing.
-    parser.add_argument("--caps", default="drive,steer3",
-                        help="subsystems to advertise, e.g. drive,steer3,mast,rfid")
+    # `steerprop` declares proportional steering — the RC-car chassis, fw 0.3.0 — and
+    # `steer3` the older three-position axle (docs/protocol.md 4.1). Exactly one steering
+    # token must accompany `drive`, so the console knows whether a `steer` of 0.3 will be
+    # honoured or rounded away; drop it deliberately to check that the console refuses to
+    # arm rather than guessing.
+    parser.add_argument("--caps", default="drive,steerprop",
+                        help="subsystems to advertise, e.g. drive,steerprop,mast,rfid "
+                             "(steer3 for the old three-position axle)")
     parser.add_argument("--protocol-version", type=int, default=PROTOCOL_VERSION,
                         metavar="N",
                         help="version to advertise; set it wrong to force a mismatch")

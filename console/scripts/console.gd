@@ -194,6 +194,9 @@ const NUDGE_VECTORS := {
 ## a mix of the two types would risk two entries for one control, which would double a
 ## throttle and leave a release unmatched.
 var _held: Dictionary = {}
+## Whether the drive pad was live at the last refresh, so a STALE pause ending is seen
+## as an edge and the thumb still on the stick can be re-applied once (_refresh_drive_pad).
+var _pad_was_enabled := false
 
 ## Arrow keys drive the same pad the touchscreen does (step 1.3 bench request). Mapping to
 ## button names rather than to vectors is deliberate: keyboard and touch then land in the
@@ -283,8 +286,9 @@ func _ready() -> void:
 ## nothing, which is a release rather than a held zero — a thumb resting on the knob must
 ## not keep the rover armed at zero throttle.
 ##
-## Steering goes out as the raw deflection; a three-position rover rounds it at ±0.5, and
-## the stick draws that threshold so the operator can see where lock engages.
+## Steering goes out as the raw deflection. A proportional (`steerprop`) rover honours it
+## continuously, through rover_link's expo curve; a three-position rover rounds it at
+## ±0.5, and only then does the stick draw that threshold (_refresh_steering_label).
 func _on_drive_stick_moved(value: Vector2) -> void:
 	if value == Vector2.ZERO:
 		_held.erase(STICK)
@@ -361,6 +365,13 @@ func _input(event: InputEvent) -> void:
 ## which is the same answer the rover would reach anyway and avoids the pad arguing with
 ## itself about which finger won.
 func _apply_pad() -> void:
+	# Paused (STALE): the stick still reports movement so `_held` follows the thumb, but
+	# nothing goes to the rover until telemetry is fresh again (_refresh_drive_pad).
+	if not _pad_enabled():
+		_link.release_drive()
+		_refresh_steering_label()
+		_highlight_held()
+		return
 	if _held.is_empty():
 		_link.release_drive()
 		_refresh_steering_label()
@@ -527,6 +538,13 @@ func _on_nudge_state_changed(running: bool) -> void:
 ## gets a loud amber line rather than silence.
 func _refresh_steering_label() -> void:
 	var kind: String = _link.steering_kind()
+
+	# The ±0.5 lock guides mean something only on a three-position rover. On a servo they
+	# would mark a threshold that does not exist.
+	var guide := 0.5 if kind == "3-POSITION" else 0.0
+	if _drive_stick.guide_x != guide:
+		_drive_stick.guide_x = guide
+		_drive_stick.queue_redraw()
 	if kind.is_empty():
 		_steering_label.text = "STEERING  ·  ---"
 		_steering_label.modulate = COLOR_IDLE
@@ -790,7 +808,8 @@ func _refresh() -> void:
 			text = "SAFE MODE - FAILSAFE TRIPPED"
 			colour = COLOR_WARN
 		Display.STALE:
-			text = "TELEMETRY STALE"
+			# Says what the pad is doing, because the stick still moves under the thumb.
+			text = "TELEMETRY STALE - DRIVE PAUSED"
 			colour = COLOR_WARN
 		Display.INCOMPATIBLE:
 			text = "PROTOCOL MISMATCH (rover v%d, console v%d)" % [
@@ -875,6 +894,14 @@ func _pad_enabled() -> bool:
 
 func _refresh_drive_pad() -> void:
 	var enabled := _pad_enabled()
+	# STALE is a pause, not a loss: the socket is still open and the same rover is on the
+	# other end, it has just gone quiet for a moment (the PC's Wi-Fi leaving the channel,
+	# 2026-11-07 — gaps of 0.5-4 s). Nothing is sent while it lasts, exactly as before,
+	# but a thumb still on the drive stick is kept, and when telemetry returns the stick's
+	# *current* position goes out as a fresh command. Lifting off during the pause is an
+	# ordinary release. Every other disabled state — link down, connecting, mismatch —
+	# still lets go of everything, so a reconnect can never resume a throttle.
+	var paused := _display == Display.STALE
 
 	# The whole panel, so the S.13 speed toggle and nudge row go dead with the pad
 	# rather than staying tappable against a rover that is not listening.
@@ -882,15 +909,23 @@ func _refresh_drive_pad() -> void:
 	_collect_buttons(_drive_panel, buttons)
 	for button in buttons:
 		button.disabled = not enabled
-	_drive_stick.disabled = not enabled
+	_drive_stick.disabled = not enabled and not paused
 	_drive_panel.modulate = Color.WHITE if enabled else Color(1, 1, 1, 0.35)
 
 	if not enabled:
 		# A disabled Button never emits button_up, so a link that drops mid-press would
 		# otherwise leave the repeat running against a rover that is already gone — and
 		# leave a phantom press in `_held` that reappears the moment the link recovers.
-		# The release also cancels a nudge in flight.
+		# The release also cancels a nudge in flight. Keys and buttons are let go even
+		# when only paused: their releases are not delivered while the pad is disabled.
+		var stick: Variant = _held.get(STICK)
 		_held.clear()
+		if paused and stick != null and _drive_stick.is_active():
+			_held[STICK] = stick
 		_link.release_drive()
+	elif not _pad_was_enabled and _held.has(STICK) and _drive_stick.is_active():
+		# Back from a pause with the thumb still down: drive from where the stick is now.
+		_apply_pad()
+	_pad_was_enabled = enabled
 	_refresh_steering_label()
 	_highlight_held()
