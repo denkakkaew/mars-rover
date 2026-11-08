@@ -61,8 +61,14 @@ is flipped, with each detection's x mirrored to match. Fixing it on the board in
 (/control?var=hmirror) would un-mirror the model's input too, which means re-shooting the
 dataset. --raw-view shows the sensor's own orientation.
 
-Keys in the window: q or Esc quits, s saves the current frame with its overlay, space
-pauses.
+THE WINDOW IS FULL SCREEN, AND NOTHING IS CROPPED. The frame is scaled to the largest size
+that fits the screen with its aspect ratio kept, and the rest is black. On a 16:9 monitor a
+4:3 frame fills the height with bars either side: the whole width of the picture stays on
+screen, including the outer columns the detector never sees. --windowed (or f) gives the
+old native-size window.
+
+Keys in the window: q or Esc quits, s saves the current frame with its overlay (at the
+camera's resolution, not the screen's), space pauses, f toggles full screen.
 """
 
 from __future__ import annotations
@@ -504,6 +510,58 @@ def draw(frame, dets, fps, infer_ms, threshold):
     return frame
 
 
+# --------------------------------------------------------------------------- window
+
+
+def screen_size() -> tuple[int, int] | None:
+    """The primary monitor in physical pixels, or None if it cannot be asked."""
+    if sys.platform == "win32":
+        import ctypes
+        user32 = ctypes.windll.user32
+        try:
+            # Without this a scaled display (125%, 150%) reports its logical size, and the
+            # letterboxed frame would be stretched again by Windows on the way out.
+            user32.SetProcessDPIAware()
+        except Exception:  # noqa: BLE001 - older Windows; the size is still usable
+            pass
+        w, h = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+        if w > 0 and h > 0:
+            return w, h
+    return None
+
+
+def open_window(fullscreen: bool) -> tuple[int, int] | None:
+    """(Re)create the video window; returns the canvas size to letterbox into, if any."""
+    cv2.destroyAllWindows()
+    if not fullscreen:
+        cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE)
+        return None
+    cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty(WINDOW, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    size = screen_size()
+    if size is None:
+        cv2.waitKey(1)  # let the window reach full screen before measuring it
+        _, _, w, h = cv2.getWindowImageRect(WINDOW)
+        size = (w, h) if w > 0 and h > 0 else None
+    return size
+
+
+def letterbox(frame, size: tuple[int, int] | None):
+    """Scale to fit inside size with the aspect ratio kept; pad the rest with black."""
+    if size is None:
+        return frame
+    sw, sh = size
+    h, w = frame.shape[:2]
+    scale = min(sw / w, sh / h)
+    nw, nh = max(1, round(w * scale)), max(1, round(h * scale))
+    interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR
+    scaled = cv2.resize(frame, (nw, nh), interpolation=interp)
+    canvas = np.zeros((sh, sw, 3), dtype=frame.dtype)
+    x0, y0 = (sw - nw) // 2, (sh - nh) // 2
+    canvas[y0:y0 + nh, x0:x0 + nw] = scaled
+    return canvas
+
+
 # --------------------------------------------------------------------------- main
 
 
@@ -533,6 +591,8 @@ def main(argv=None) -> int:
     p.add_argument("--raw-view", action="store_true",
                    help="show the sensor's mirrored image as-is (default: flip the "
                         "window so left is left; detection is unaffected either way)")
+    p.add_argument("--windowed", action="store_true",
+                   help="a native-size window instead of full screen (f toggles)")
     p.add_argument("--bench", type=int, metavar="N",
                    help="time N frames with no window, print the numbers, exit")
     args = p.parse_args(argv)
@@ -558,6 +618,9 @@ def main(argv=None) -> int:
     frames = 0
     paused = False
     last = None
+    fullscreen = not args.windowed
+    canvas = None
+    window_open = False
     t_start = time.perf_counter()
 
     try:
@@ -613,13 +676,19 @@ def main(argv=None) -> int:
                 frame = cv2.flip(frame, 1)
                 dets = mirror_dets(dets, frame.shape[1])
             draw(frame, dets, fps, float(np.mean(infer_recent)), args.min_confidence)
-            cv2.imshow(WINDOW, frame)
+            if not window_open:
+                canvas = open_window(fullscreen)
+                window_open = True
+            cv2.imshow(WINDOW, letterbox(frame, canvas))
 
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):
                 break
             if key == ord(" "):
                 paused = not paused
+            if key == ord("f"):
+                fullscreen = not fullscreen
+                window_open = False
             if key == ord("s"):
                 SHOTS.mkdir(parents=True, exist_ok=True)
                 out = SHOTS / time.strftime("detect_%Y%m%d-%H%M%S.jpg")
